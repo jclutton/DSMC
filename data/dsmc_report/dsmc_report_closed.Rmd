@@ -1,0 +1,791 @@
+---
+title: "Title"
+author: "Authors"
+output:
+  word_document:
+    toc: TRUE
+    reference_docx: style_template.docx
+
+
+---
+
+```{r setup, include=FALSE}
+##### Declare Libraries #####
+library(rio)
+library(tidyverse)
+library(flextable)
+library(gtsummary)
+library(officedown)
+library(officer)
+
+
+#### Directories ####
+if(Sys.info()['user']=="vidon"){ #Eric's computer
+  root <- file.path('Z:')
+  user <- 'Eric'
+} else if(Sys.info()['sysname']=="Windows"){ #Jon's computer
+  root <- file.path('P:')
+  user <- 'Jon'
+} else {
+  error("This drive has not been set up yet.")
+}
+
+drive_dir <- file.path(root,'IRB_STUDY0011132_Cohort','RIS_code')
+
+project_dir <- file.path(drive_dir,'BOLD_dsmc')
+  script_dir <- file.path(project_dir,'R')
+  data_dir <- file.path(project_dir,'data')
+    raw_data_dir <- file.path(data_dir,'raw')
+    output_data_dir <- file.path(data_dir,'output')
+    dsmc_dir <- file.path(data_dir,'dsmc_report')
+      ppt_destination <- file.path(dsmc_dir,'tables_as_ppt')
+
+ ###.Rdata Info####
+data_date <- file.info(file.path(output_data_dir,'clean_data.Rdata')) %>%
+  select(mtime) %>%
+  mutate(mtime = format(mtime - days(1), '%b. %d, %Y')) %>%
+  pull()  
+      
+##### Randomize Groups #####
+random_groups <- data.frame(random_group_letter = c('A','B')) %>%
+        mutate(random_group_number = sample(nrow(.), size = nrow(.), replace = F)) 
+      
+###### Load Data #####
+load(file.path(output_data_dir,'clean_data.Rdata'))
+
+##### COMET database (test entry removed) ######
+status_to_join <- look_up_table %>%
+      filter(field == "intervention_status") %>%
+      rename(Status = id_name) %>%
+      select(-field)
+      
+group_to_join <- look_up_table %>%
+  filter(field == "group") %>%
+  select(-field) %>%
+  rename(Group = id_name)
+    
+bold <- bold %>%
+  left_join(., status_to_join, by = c('intervention_status'='id_num')) %>%
+  left_join(., random_groups, by = c("group" = "random_group_number")) %>%
+  mutate(Group = random_group_letter)
+
+
+###### import ctcae categories and terms #######
+ctcae_categories <- import(file.path(data_dir,'dsmc_report','CTCAE_v5.0_categories.xlsx'))
+ctcae_terms <- import(file.path(data_dir,'dsmc_report','CTCAE_v5.0_terms.xlsx'))
+
+#### Adverse Event and EOI Databases ######
+#'20230822: Changed ctcae_term to be ae_event (the short description) if it's an "other" ctcae term. Check with team if they like that. JC
+#'
+groups_to_join_ae <- bold %>%
+    select(record_id, Status, Group, random_group_letter) 
+
+ae_outcome_to_join <- look_up_table %>%
+  filter(field == "ae_outcome_2") %>%
+  select(-field)
+
+ae_master <- redcap %>%
+  filter(!is.na(ae_date)) %>%
+  mutate(Related = case_when(ae_related == 0 ~ "Not Related",
+                             ae_related == 2 ~ "Possibly Related",
+                             ae_related == 1 ~ "Definitely Related")) %>%
+  left_join(., ctcae_categories, by = c("ae_ctcae_category" = "ctcae_identifier")) %>%
+  left_join(., ctcae_terms, by = c("ae_ctcae_term" = "ctcae_term_identifier")) %>%
+  mutate(ctcae_term = case_when(grepl("Other",ctcae_term,ignore.case=T) & str_length(ae_ctcase_term_oth) <= 50 ~ ae_ctcase_term_oth,
+                                T ~ ctcae_term)) %>%
+  mutate("SOC and Preferred Term" = case_when(!grepl("Other", ctcae_term) ~ paste(ctcae_category,"-",ctcae_term),
+                                              TRUE ~ ctcae_term)) %>%
+  left_join(., ae_outcome_to_join, by = c('ae_outcome_2'='id_num')) %>%
+  rename("Outcome" = "id_name") %>%
+  mutate(Serious = case_when(ae_was_ae_serious == 0 ~ "No",
+                             ae_was_ae_serious == 1 ~ "Yes")) %>%
+  mutate(Severity = case_when(ae_severity == 1 ~ "Grade 1; Mild",
+                              ae_severity == 2 ~ "Grade 2; Moderate",
+                              ae_severity == 3 ~ "Grade 3; Severe",
+                              ae_severity == 4 ~ "Grade 4; Life Threatening",
+                              ae_severity == 5 ~ "Grade 5; Death related to AE")) %>%
+  mutate(ctcae_term = case_when(grepl("covid",ctcae_term,ignore.case=T) ~ "COVID-19",
+                                T ~ ctcae_term)) %>%
+  left_join(., groups_to_join_ae, by = "record_id") 
+
+
+
+
+
+
+##### import recruitment projections ####
+recruitment_projection <- import(file.path(data_dir,'codebooks','recruitment_projection.xlsx')) %>%
+  mutate(week = week(ymd(Date)), year = year(ymd(Date)))
+
+##### Source consort diagram to use throughout document ####
+source(file.path(data_dir,'dsmc_report','dsmc_consort_generator_closed.R'))
+
+###### Date as of Report ####
+date_as_of <- data_date
+
+###### Last Report ######
+date_of_last_report <- ymd('2023-02-08')
+
+#### date of first screen ####
+first_screen <- min(ymd(bold$scrn_date), na.rm = T)-1
+
+#### Set Semester months ####
+semester_1 <- semesters$semester_1
+semester_2 <- semesters$semester_2
+year(today())
+
+last_semester_2_date <- ymd(paste0(year(today()),
+                              str_pad(as.character(first(semester_1)), side = "left", pad = "0", width = 2),
+                              "01")) - 1
+semester_2_string <- paste0(str_pad(as.character(month(last_semester_2_date)), side = "left", pad = "0", width = 2),
+                            day(last_semester_2_date))
+
+last_semester_1_date <- ymd(paste0(year(today()),
+                              str_pad(as.character(first(semester_2)), side = "left", pad = "0", width = 2),
+                              "01")) - 1
+semester_1_string <- paste0(str_pad(as.character(month(last_semester_1_date)), side = "left", pad = "0", width = 2),
+                                                 day(last_semester_1_date))
+
+#### Testing PPTX Export ####
+#' adding on 20230921
+#' Paths to the two files
+template_file <- file.path(ppt_destination,"template.pptx")
+tbl_file <- file.path(ppt_destination,"tables.pptx")
+
+#Create a blank file each time script is run so that tables don't keep getting added over and over again
+file.copy(from = template_file,
+          to = tbl_file,
+          overwrite = T)
+#Find size of slide
+sl_size <- read_pptx(tbl_file) %>% 
+  slide_size()
+
+#Write function to add table to slide to be used throughout script
+add_table <- function(table){
+  
+  ft_dim <- flextable_dim(table)
+  left <- (sl_size$width/2) - (ft_dim$widths/2)
+  top <- (sl_size$height/2) - (ft_dim$heights/2)
+  
+  tables <- read_pptx(tbl_file) %>%
+    add_slide(.,
+              layout = "Blank",
+              master = "Office Theme") %>%
+    ph_with(., 
+            value = table,
+            location = ph_location(left = left, top = 0))
+  
+  print(tables,
+        target = file.path(ppt_destination,'tables.pptx'))
+  
+}
+
+
+
+
+
+```
+
+\newpage
+
+# Closed Session Report Summary
+
+Please write a closed report summary
+
+
+\newpage
+
+# Recruitment and Participant Status: Figure and Tables  
+
+
+\newpage
+
+## Figure 1a: Screening Consort Diagram
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+Recruitment start date: Sept 09, 2021
+
+```{r consorta, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+
+knitr::include_graphics(file.path(data_dir,'dsmc_report','closed_consort_screen.png'), dpi = 6.92) 
+
+```
+
+\newpage
+
+## Figure 1b: Enrollment Consort Diagram
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+Recruitment start date: Sept 09, 2021
+
+```{r consortb, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+
+knitr::include_graphics(file.path(data_dir,'dsmc_report','closed_consort_enrolled.png'), dpi = 6.92) 
+
+```
+
+\newpage
+
+
+##  Table 3: Demographic and Key Baseline Characteristics 
+
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r table_4, echo=FALSE, warning=FALSE, message=FALSE}
+
+#Source  https://www.ers.usda.gov/data-products/rural-urban-commuting-area-codes/
+#Updated on 8/18/22 with a list from EDV
+rural_zips <- import(file.path(data_dir,'dsmc_report','forhp-eligible-zips.xlsx')) %>%
+  pull(ZIP_CODE)
+
+enrolled_df <- randomized 
+
+test <- enrolled_df  %>%
+  mutate(Rural = case_when(scrn_address_zip %in% rural_zips ~ "Rural",
+                           T ~ "Not Rural")) %>%
+  select(race, ethnicity, sex, Rural, age, Group) %>%
+  rename(Race = race, Ethnicity = ethnicity, sex = sex, Age = age)
+
+gtsummary::tbl_summary(test,
+                       by = Group,
+                       statistic = all_continuous() ~ "{mean}, ({sd})",
+                       type = list(Age ~ "continuous")) %>%
+  add_p(list(all_continuous() ~ "aov",
+             all_categorical() ~ "fisher.test")) %>%
+  as_flex_table() %>%
+  add_footer_lines("p-values were calculated using Fisher’s exact test for categorical variables (Race, Ethnicity, sex and Rural) and a one-way ANOVA for continuous variables. ") %>%
+  set_table_properties(., layout = "autofit", width = 1)
+
+
+
+
+
+
+```
+
+\newpage
+
+
+# Safety Assessments for All Participants: Tables and Listing 
+
+## CTCAE 5.0 Criteria
+
+**Grades**  
+
+Grade refers to the severity of the AE. The CTCAE displays Grades 1 through 5 with unique clinical descriptions of severity for each AE based on this general guideline:  
+
+- **Grade 1** Mild; asymptomatic or mild symptoms; clinical or diagnostic observations only; intervention not indicated.  
+
+- **Grade 2** Moderate; minimal, local or noninvasive intervention indicated; limiting age-appropriate instrumental ADL*.  
+
+- **Grade 3** Severe or medically significant but not immediately life-threatening; hospitalization or prolongation of hospitalization indicated; disabling; limiting self care ADL**.  
+
+- **Grade 4** Life-threatening consequences; urgent intervention indicated.  
+
+- **Grade 5** Death related to AE.  
+
+
+**Relatedness**  
+
+Relatedness refers to the relationship of the AE to the intervention. COMET rates relatedness from not related to definitely related.
+
+- **Not Related** The AE is clearly NOT related to the intervention 
+
+- **Possibly Related** The AE may be related to the intervention  
+
+- **Definitely Related** The AE is clearly related to the intervention
+
+**Definitions**  
+
+- **Adverse Event** Any untoward or unfavorable medical occurrence in a human subject participant, including any abnormal sign, symptom, or disease, temporally associated with the participants’ involvement in the research, whether or not considered related to participation in the research.
+
+- **Event of Interest** Incidental findings or events uncovered during baseline testing not directly attributable to the study. It is often unclear if the event is new onset. Most are pre-existing and asymptomatic i.e., asymptomatic ST segment depression on a maximal exercise test. 
+
+- **System Organ Class (SOC)** The highest level of the MedDRA1 hierarchy, also referred to as System Organ Classe (SOC), is identified by anatomical or physiological system, etiology, or purpose (e.g., SOC Investigations for laboratory test results). CTCAE terms are grouped by MedDRA Primary SOCs. Within each SOC, AEs are listed and accompanied by descriptions of severity (Grade). 
+
+- **Preferred Term** A term that is a unique representation of a specific event used for medical documentation and scientific analyses. Each CTCAE v4.0 term is a MedDRA LLT (Lowest Level Term).
+
+
+
+
+\newpage
+
+
+## Table 7a: Non-related Adverse Events
+
+Date as of: `r date_as_of`
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r table_6_events_summary, echo=FALSE, warning=FALSE, message=FALSE, fig.width=8}
+
+
+adverse_events_6 <- ae_master %>%
+  filter(ae_related == 0) %>% 
+  mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
+                             T ~ "Since Last Report")) %>%
+  select(ctcae_term, Group, updates) %>%
+  rename("Preferred Term" = ctcae_term,
+         "Updates" = updates) 
+
+if(nrow(adverse_events_6)>0){
+  gtsummary::tbl_summary(adverse_events_6,
+                       by = Group,
+                       sort = everything() ~ "frequency") %>%
+  modify_header(label ~ "Adverse Events") %>%
+  as_flex_table() %>%
+  align(align = "center", part = "header") %>%
+  add_header_lines(., "Non-related Adverse Events") %>%
+  set_table_properties(., layout = "autofit", width = 1)
+} else {
+  print("There have been no non-related adverse events.")
+}
+
+
+
+ 
+```
+
+\newpage
+
+## Table 7b: Related Adverse Events
+
+Date as of: `r date_as_of`
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r table_6b_events_summary, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+adverse_events_6 <- ae_master %>%
+  filter(ae_related != 0) %>% 
+  mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
+                             T ~ "Since Last Report")) %>%
+  select(ctcae_term, updates, Group) %>%
+  rename("Preferred Term" = ctcae_term,
+         "Updates" = updates) 
+
+if(nrow(adverse_events_6)>0){
+  gtsummary::tbl_summary(adverse_events_6,
+                       by = Group,
+                       sort = everything() ~ "frequency") %>%
+  #add_overall() %>%
+  modify_header(label ~ "Adverse Events") %>%
+  as_flex_table() %>%
+  align(align = "center", part = "header") %>%
+  add_header_lines(., "Related Adverse Events") %>%
+  add_footer_lines(., "*Table includes both possibly- and definitely-related adverse events.") %>%
+  set_table_properties(., layout = "autofit", width = 1)
+} else{
+  print("There have been no related adverse events.")
+}
+
+
+
+
+ 
+```
+
+
+\newpage
+
+
+## Table 7c: Non-related Serious Adverse Events
+
+Date as of: `r date_as_of`
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r table_7c, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+adverse_events_6 <- ae_master %>%
+  filter(ae_related == 0 &
+           ae_was_ae_serious == 1) %>% 
+  mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
+                             T ~ "Since Last Report")) %>%
+  select(ctcae_term, updates, Group) %>%
+  rename("Preferred Term" = ctcae_term,
+         "Updates" = updates) 
+
+if(nrow(adverse_events_6)>0){
+  gtsummary::tbl_summary(adverse_events_6,
+                       by = Group,
+                       sort = everything() ~ "frequency") %>%
+  #add_overall() %>%
+  modify_header(label ~ "Adverse Events") %>%
+  as_flex_table() %>%
+  align(align = "center", part = "header") %>%
+  add_header_lines(., "Non-related Serious Adverse Events") %>%
+  set_table_properties(., layout = "autofit", width = 1)
+} else {
+  print("There have been no non-related serious adverse events.")
+}
+
+
+
+
+ 
+```
+
+\newpage
+
+
+
+## Table 7d: Related Serious Adverse Events
+
+Date as of: `r date_as_of`
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r table_7d, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+adverse_events_6 <- ae_master %>%
+  filter(ae_related > 0 & ae_was_ae_serious == 1) %>% 
+  mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
+                             T ~ "Since Last Report")) %>%
+  select(ctcae_term, updates, Group) %>%
+  rename("Preferred Term" = ctcae_term,
+         "Updates" = updates)
+
+if(nrow(adverse_events_6)>0){
+  gtsummary::tbl_summary(adverse_events_6,
+                         by = Group,
+                         sort = everything() ~ "frequency") %>%
+    add_overall() %>%
+    modify_header(label ~ "Adverse Events") %>%
+    as_flex_table() %>%
+    align(align = "center", part = "header") %>%
+    add_header_lines(., "Related Serious Adverse Events") %>%
+    add_footer_lines(., "*Table includes both possibly- and definitely-related adverse events.") %>%
+    set_table_properties(., layout = "autofit", width = 1)
+} else {
+  print("There have been no related serious adverse events.")
+}
+
+
+
+
+ 
+```
+
+\newpage
+
+
+##  Table 8a: Severity of Adverse Events by Group
+
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r table_7a, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+adverse_events_7 <- ae_master %>%
+  filter(!is.na(Group)) %>%
+  rename("Preferred Term" = ctcae_term) %>% 
+  select(Group, Severity) %>%
+  arrange(Group)
+
+if(nrow(adverse_events_7)>0){
+gtsummary::tbl_summary(adverse_events_7,
+                       by = Severity) %>%
+  modify_header(label ~ "") %>%
+  as_flex_table() %>%
+  add_footer_lines(., "Adverse events that occurred in participants without an assigned group have been removed from tables sorting by group.") %>%
+  set_table_properties(., layout = "autofit", width = 1) 
+} else {
+  print("There have been no adverse events.")
+}
+
+
+
+
+
+```
+
+\newpage
+
+##  Table 9a: Relatedness of Adverse Events by Group
+
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r table_7b, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+adverse_events_7 <- ae_master %>%
+  filter(!is.na(Group)) %>%
+  rename("Preferred Term" = ctcae_term) %>%
+  select(Group, Related)
+
+if(nrow(adverse_events_7)>0){
+gtsummary::tbl_summary(adverse_events_7,
+                       by = Related) %>%
+  #modify_table_body(~.x %>% dplyr::relocate(stat_2, .after = stat_3)) %>%
+  modify_header(label ~ "") %>%
+  as_flex_table() %>%
+  add_footer_lines(., "Adverse events that occurred in participants without an assigned group have been removed from tables sorting by group.") %>%
+  set_table_properties(., layout = "autofit", width = 1)
+} else {
+  print("There have been no adverse events.")
+}
+
+
+
+
+
+```
+
+\newpage
+
+
+##  Listing 3a: Serious Adverse Events 
+
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r listing_1a, echo=FALSE, warning=FALSE, message=FALSE}
+
+# To do: need to update names and add in outcome column
+
+listing_1 <- ae_master %>%
+  filter(ae_was_ae_serious == 1) %>%
+  select(Group, ae_date_of_onset, ae_date_ceased, Related, `SOC and Preferred Term`, ae_dsmc_summary) %>%
+  rename("Summary" = ae_dsmc_summary, "Date of Onset" = ae_date_of_onset, "Date Ceased" = ae_date_ceased)
+
+if(nrow(listing_1) > 0) {
+  listing_1 %>% 
+    flextable() %>% 
+    # add_header_lines(., paste0("Total N = ",completed_baseline)) %>% 
+    # add_header_lines(., "Treatment Duration for All Participants") %>% 
+    theme_booktabs() %>%
+    set_table_properties(., layout = "autofit", width = 1)
+} else {
+  cat("There have been no serious adverse events")
+}
+
+
+```
+
+\newpage
+
+##  Listing 4: Deaths 
+
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r listing_2, echo=FALSE, warning=FALSE, message=FALSE}
+
+# To do: need to update names and add in outcome column
+
+listing_2 <- ae_master %>%
+  filter(!is.na(ae_death_date)) %>% 
+  rename("Date of Death" = ae_death_date, "Cause of Death" = ae_death_cause) %>%
+  select(Group, "Date of Death", "Cause of Death", Related) 
+  
+
+if(nrow(listing_2) > 0) {
+  listing_2 %>% 
+    flextable() %>% 
+    autofit() %>%
+    theme_booktabs()
+} else {
+  cat("There have been no deaths.")
+}
+
+
+```
+
+\newpage
+
+##  Listing 5a: New Adverse Events Related to the Intervention
+
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r listing_3a, echo=FALSE, warning=FALSE, message=FALSE}
+####This is actually listing_4a. A protocol deviation listing was added above, and all code below was kept consistent to save time.
+
+listing_3a <- ae_master %>%
+  filter(ae_date >= date_of_last_report) %>%
+  filter(ae_related != 0) %>%
+  arrange(desc(.$ae_related), ae_date) %>%
+  select(Group, ae_date, Related, Severity, `SOC and Preferred Term`, ae_dsmc_summary) %>%
+  rename("Date" = ae_date, "Summary" = ae_dsmc_summary) 
+
+
+listing_3a %>% 
+  flextable() %>% 
+  align(align = "center", part = "header") %>%
+  add_header_lines(., paste0("Adverse Events Related to the Intervention Since Date of Last Report (",date_of_last_report,")")) %>% 
+  theme_booktabs() %>%
+  set_table_properties(., layout = "autofit", width = 1)
+
+
+```
+
+\newpage
+```{r listing_3a_powerpoint, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, include = F}
+#' 20230802 This was added to for the presentation of AEs only. It's not included in the report, but is used to generate a table of AEs that are 
+#' easy to show during the powerpoint
+
+listing_3a <- ae_master %>%
+  filter(ae_date >= date_of_last_report) %>%
+  filter(ae_related != 0) %>%
+  arrange(Group, ae_date) %>%
+  select(Group, ae_date, Related, Outcome, Severity, ctcae_term) %>%
+  rename("Date" = ae_date, "Event" = ctcae_term) 
+
+
+listing_3a %>% 
+  flextable() %>% 
+  align(align = "center", part = "header") %>%
+  add_header_lines(., paste0("Adverse Events Related to the Intervention Since Date of Last Report (",date_of_last_report,")")) %>% 
+  theme_booktabs() %>%
+  set_table_properties(., layout = "autofit")
+
+
+
+```
+
+\newpage
+
+
+
+
+##  Listing 5b: New Adverse Events Not Related to Intervention
+
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r listing_3b, echo=FALSE, warning=FALSE, message=FALSE}
+
+listing_3b <- ae_master %>%
+  filter(ae_date >= date_of_last_report) %>%
+  filter(ae_related == 0) %>%
+  arrange(ae_date) %>%
+  select(Group, ae_date, Related, Severity, `SOC and Preferred Term`, ae_dsmc_summary) %>%
+  rename("Date" = ae_date, "Summary" = ae_dsmc_summary) 
+
+
+
+listing_3b %>% 
+  flextable() %>% 
+  align(align = "center", part = "header") %>%
+  add_header_lines(., paste0("Adverse Events Not Related to the Intervention Since Date of Last Report (",date_of_last_report,")")) %>% 
+  theme_booktabs() %>%
+  set_table_properties(., layout = "autofit", width = 1)
+
+
+```
+
+\newpage
+
+##  Listing 6a: All Adverse Events 
+
+
+Date as of: `r date_as_of` 
+
+\newline
+
+Date of report: `r format(Sys.time(), '%b %d, %Y')`
+
+\newline
+
+```{r listing_4a, echo=FALSE, warning=FALSE, message=FALSE}
+
+listing_4a <- ae_master %>%
+  rename("Date" = ae_date) %>%
+  select(Group, Date, "SOC and Preferred Term", Related, Severity, Serious, Outcome)  %>%
+  arrange(Group, "SOC and Preferred Term")
+
+
+listing_4a %>% 
+  flextable() %>% 
+  align(align = "center", part = "header") %>%
+  add_header_lines(., "All Adverse Events") %>% 
+  theme_booktabs() %>%
+  set_table_properties(., layout = "autofit", width = 1)
+
+
+```
+\newpage
+
