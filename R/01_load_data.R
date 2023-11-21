@@ -43,3 +43,60 @@ look_up_table <- data_dictionary %>%
 #### Load semester codebook ####
 semester_file <- file.path(data_dir,'codebooks','bi-annual_periods.xlsx')
 semesters <- import(semester_file)
+
+#### Get last DSMC Date ####
+dsmc_date_file <- file.path(data_dir,'codebooks','dsmc_dates.csv')
+if(!file.exists(dsmc_date_file)){
+  dsmc_dates <- data.frame()
+  last_date <- NA_Date_
+} else {
+  dsmc_dates <- import(dsmc_date_file)
+  last_date <- last(dsmc_dates$Date)
+}
+
+#' 20231121: Writted by BH, edited by JC. 
+# get_last_date function
+get_last_date <- function(last_dates){
+  cat(sprintf("The date we have for the last DSMC meeting is: %s\n\n", format(last_date, "%B %d, %Y")))
+  choice <- utils::menu(title = "Is this still correct?", choices = c("No", "Yes"))
+  if(choice == 1){
+    switch = 0
+    while(switch == 0){
+      last_date <- readline(prompt = "Please enter the date (mm/dd/yyyy) of the last DSMC meeting: ")
+      last_date <- 
+        last_sync <- tryCatch(
+          as.Date(last_date, tryFormats = c("%m/%d/%Y",
+                                            "%m/%d/%y",
+                                            "%m-%d-%Y",
+                                            "%m-%d-%y",
+                                            "%m%d%Y")),
+          error = function(e) 
+          {e
+            cat("There was an error reading your date. Please be sure it is formatted correctly.")
+            switch <- 0
+          }
+        )
+      
+      if(lubridate::is.Date(last_date) & !is.na(last_date)) {
+        switch <- 1
+        
+      }
+    }
+  }
+  return(last_date)
+}
+
+# Save last date into a file
+last_date <- get_last_date(last_date)
+
+# update dsmc dates
+dsmc_dates <- add_row(dsmc_dates, Date = last_date)
+
+#export dsmc_date_file
+export(dsmc_dates, file = dsmc_date_file)
+
+
+
+
+
+

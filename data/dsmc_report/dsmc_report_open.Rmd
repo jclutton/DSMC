@@ -103,6 +103,9 @@ source(file.path(data_dir,'dsmc_report','dsmc_consort_generator_open.R'))
 date_as_of <- data_date
 
 ###### Last Report ######
+#' Notes from 20231117
+#' Function in utils package called menu
+#' Utils menu the dates <- store dates that are entered. Check 1 or 2 if they need to add a new date or use previous. 
 date_of_last_report <- ymd('2023-02-08')
 
 #### date of first screen ####
@@ -643,6 +646,8 @@ table_3a <- gtsummary::tbl_summary(test,
   autofit()
 
 table_3a 
+
+add_table(table_3a)
 
 
 

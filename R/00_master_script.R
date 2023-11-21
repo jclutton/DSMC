@@ -43,7 +43,7 @@ if(Sys.info()['user']=="vidon"){ #Eric's computer
 
 drive_dir <- file.path(root,'IRB_STUDY0011132_Cohort','RIS_code')
 
-project_dir <- file.path(drive_dir,'BOLD_dsmc')
+project_dir <- file.path(drive_dir,'DSMC')
   script_dir <- file.path(project_dir,'R')
   data_dir <- file.path(project_dir,'data')
     raw_data_dir <- file.path(data_dir,'raw')
