@@ -10,6 +10,7 @@
 
 #### Save Image ####
 save.image(file.path(output_data_dir,'clean_data.Rdata'))
+
 ########Render Reports ###############
 rmarkdown::render(input = file.path(data_dir,"dsmc_report","dsmc_report_open.Rmd"), output_file = file.path(output_data_dir,"dsmc_report_open.docx")) 
 rmarkdown::render(input = file.path(data_dir,'dsmc_report','dsmc_report_closed.Rmd'), output_file = file.path(output_data_dir,'dsmc_report_closed.docx'))

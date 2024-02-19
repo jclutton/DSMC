@@ -15,9 +15,12 @@
 message("Began 01_load_data.R")
 #### Import REDCap data ####
 #Need to figure out workflow
-redcap_file <- list.files(path = raw_data_dir,
+redcap_file <- file.info(list.files(path = raw_data_dir,
                          pattern = "DATA",
-                         full.names = T)
+                         full.names = T)) %>%
+  filter(mtime == max(mtime)) %>%
+  rownames_to_column() %>%
+  pull(rowname)
 
 redcap <- import(redcap_file)
 
@@ -47,10 +50,11 @@ semesters <- import(semester_file)
 #### Get last DSMC Date ####
 dsmc_date_file <- file.path(data_dir,'codebooks','dsmc_dates.csv')
 if(!file.exists(dsmc_date_file)){
-  dsmc_dates <- data.frame()
+  dsmc_dates <- data.frame(Date = Date())
   last_date <- NA_Date_
 } else {
-  dsmc_dates <- import(dsmc_date_file)
+  dsmc_dates <- import(dsmc_date_file) %>%
+    mutate(Date = as_date(Date))
   last_date <- last(dsmc_dates$Date)
 }
 
@@ -85,6 +89,7 @@ get_last_date <- function(last_dates){
   }
   return(last_date)
 }
+
 
 # Save last date into a file
 last_date <- get_last_date(last_date)

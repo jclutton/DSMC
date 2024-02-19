@@ -18,21 +18,11 @@
 #' 20231111: Began development
 
 #### Prep Data Dictionary ####
+#'Using rio to import csv automatically recognizes dates and converts into ymd idate format
 date_fields <- data_dictionary %>% 
   filter(grepl("date",.$`Text Validation Type OR Show Slider Number`)) %>%
   pull(`Variable / Field Name`)
 
-date_mdy <- data_dictionary %>%
-  filter(.$`Text Validation Type OR Show Slider Number` == "date_mdy") %>%
-  pull(`Variable / Field Name`)
-
-datetime_seconds_mdy <- data_dictionary %>%
-  filter(.$`Text Validation Type OR Show Slider Number` == "datetime_seconds_mdy") %>%
-  pull(`Variable / Field Name`)
-
-datetime_mdy <- data_dictionary %>%
-  filter(.$`Text Validation Type OR Show Slider Number` == "datetime_mdy") %>%
-  pull(`Variable / Field Name`)
 
 #### Project wide, cleaned BOLD data frame ####
 bold <- redcap %>%
@@ -65,6 +55,7 @@ bold <- redcap %>%
                                     `1` = "Not Hispanic or Latino",
                                     `-1`= "Refused",
                                     .default = "Other - need to update")) %>%
+  #all dates are ymd idate format because read through rio. This converts all to dates.
   mutate_at(vars(any_of(date_fields)), ~ymd(.)) 
 
 
