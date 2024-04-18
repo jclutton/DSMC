@@ -32,16 +32,14 @@ lapply(packages, require, character.only = TRUE)
 
 #### Directories ####
 if(Sys.info()['user']=="vidon"){ #Eric's computer
-  root <- file.path('Z:')
-  user <- 'Eric'
+  root <- #setup this drive for your project
 } else if(Sys.info()['sysname']=="Windows"){ #Jon's computer
-  root <- file.path('P:')
-  user <- 'Jon'
+  root <- #Setup this drive for your project
 } else {
   error("This drive has not been set up yet.")
 }
 
-drive_dir <- file.path(root,'IRB_STUDY0011132_Cohort','RIS_code')
+drive_dir <- #Setup this drive for your project
 
 project_dir <- file.path(drive_dir,'DSMC')
   script_dir <- file.path(project_dir,'R')
