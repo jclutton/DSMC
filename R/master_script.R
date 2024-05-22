@@ -23,27 +23,20 @@ token <- ''
 #### EDIT - Unique identifier name - Edit this for each project####
 unique_identifier <- 'record_id'
 
-#### EDIT - When was the date of the last DSM Meeting? ####
-#If this is the first report, change this to NA
-#If this is a repeat dsm meeting, change the date in quotes to match the date of the last meeting
-date_of_last_report <- ymd('20231001')
-
 #Do NOT edit anything about the api_info vector
 api_info <- c('redcap_uri', 'token', 'unique_identifier', 'date_of_last_report')
 
 #### EDIT - Directories ####
 # Please edit the root path and the drive_dir to match your need
 if(Sys.info()['sysname']=="Windows"){ 
-  root <- file.path('')
+  root <- file.path('C:')
 } else {
   error("This drive has not been set up yet.")
 }
 
 #EDIT - This should be the path to where you saved the DSMC project i.e. C:/Users/user/Documents
-drive_dir <- file.path(root,'')
+drive_dir <- file.path(root,'Users','jclutton','Documents')
 
-
-#### Anything below this point should not need to be edited ####
 
 #### Drives - Do NOT EDIT THESE #####
 project_dir <- file.path(drive_dir,'DSMC')
@@ -60,18 +53,20 @@ drives <- c('root','drive_dir','script_dir','data_dir','raw_data_dir','output_da
 
 
     
-
+#Do NOT EDIT
 #### Libraries ####
 #Project wide packages
 packages <- c('tidyverse','openxlsx','rio','flextable',
               'gtsummary','officedown','officer',
-              'REDCapR','janitor')
+              'REDCapR','janitor','knitr')
 
+#DO NOT EDIT
 #Check what has been installed
 my_packages <- as.data.frame(installed.packages()[ , c(1, 3:4)]) 
 
 packages_to_install <- packages[which(!packages %in% my_packages$Package)]
 
+#DO NOT EDIT
 #Install missing packages
 if(length(packages_to_install)>0){
   for(i in 1:length(packages_to_install)){
@@ -79,11 +74,16 @@ if(length(packages_to_install)>0){
   }
 }
 
+#DO NOTE EDIT
 #Load Packages
 lapply(packages, require, character.only = TRUE)
 
+#### EDIT - When was the date of the last DSM Meeting? ####
+#If this is the first report, change this to NA
+#If this is a repeat dsm meeting, change the date in quotes to match the date of the last meeting
+date_of_last_report <- ymd('20231001')
 
-
+#DO NOT EDIT
 #### Save All Necessary Info for Markdown ####
 save(packages, file = file.path(dsmc_dir,'packages.Rdata'))
 save(list = drives, file = file.path(dsmc_dir,'drives.Rdata'))
