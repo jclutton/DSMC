@@ -16,6 +16,9 @@ Study](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0293874
 (RO1 AG070036) The work is being converted into a package for improved
 usability and accessibility.
 
+Sample reports are available
+[here.](https://github.com/jclutton/DSMC/tree/main/data/output)
+
 ## DISCLAIMER
 
 The consort diagrams in this project only support two group
@@ -110,5 +113,7 @@ available by fall 2024.
     - drive_dir (parent folder to where DSMC is saved)
 
 9.  Source the master_script.R and fix any issues
+
+10. The open and closed reports will be in the data\output folder
 
 <img src="amia_poster_cic_2024_jc20240508.png" width="100%" />

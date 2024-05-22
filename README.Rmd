@@ -11,6 +11,8 @@ knitr::opts_chunk$set(
   fig.path = "man/figures/README-",
   out.width = "100%"
 )
+
+
 ```
 
 # DSMC
@@ -19,11 +21,14 @@ Data and safety monitor (DSM) reporting is a necessary, but time-intensive proce
 
 This project was developed from work on the [COMET Study](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0293874) (RO1 AG070036) The work is being converted into a package for improved usability and accessibility.
 
+Sample reports are available [here.](https://github.com/jclutton/DSMC/tree/main/data/output)
+
 ## DISCLAIMER
 
 The consort diagrams in this project only support two group interventions. Only the CTCAE 5.0 classification is supported for adverse event reporting. You will need an API token to your REDCap project.
 
 This project has not been thoroughly tested and might not work easily for your needs. It will require small updates to code and it might require extensive work. Please feel free to use it, as you see fit, to improve the efficiency of your study; however, if you'd like a fully tested and more easily implemented package, please follow along at <https://github.com/jclutton/dsmreport>. We hope to have the package available by fall 2024.
+
 
 ## Instructions for use
 
@@ -87,6 +92,7 @@ This project has not been thoroughly tested and might not work easily for your n
 
 9.  Source the master_script.R and fix any issues
 
+10. The open and closed reports will be in the data\\output folder
 
 ```{r image, echo=FALSE, warning=FALSE, message=FALSE}
 knitr::include_graphics('amia_poster_cic_2024_jc20240508.png')
