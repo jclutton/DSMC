@@ -21,10 +21,18 @@ Sample reports are available
 
 ## DISCLAIMER
 
-The consort diagrams in this project only support two group
-interventions. Only the CTCAE 5.0 classification is supported for
-adverse event reporting. You will need an API token to your REDCap
-project.
+- The consort diagrams in this project only support two group
+  interventions.
+
+- Only the CTCAE 5.0 classification is supported for adverse event
+  reporting.
+
+- You will need an API token to your REDCap project.
+
+- Not all tables output to the powerpoint
+
+- There must be data in the REDCap database. If the project is missing
+  data in key spots, the code will throw an errorl
 
 This project has not been thoroughly tested and might not work easily
 for your needs. It will require small updates to code and it might
@@ -45,7 +53,9 @@ available by fall 2024.
     project. If your project might contain identifying information, be
     sure to use a secure drive.
 
-3.  Find the redcap_instruments folder in the DSMC folder
+3.  Change the folder name from DSMC-main to DSMC.
+
+4.  Find the redcap_instruments folder in the DSMC folder
 
     1.  Install the three instruments in your REDCap project. Do not
         change the names of any variables. You can change the labels to
@@ -86,21 +96,21 @@ available by fall 2024.
 
     <img src="redcap_setup_example.PNG" width="100%" />
 
-4.  Get the API and and REDCap uri for your project. This will be a
+5.  Get the API and and REDCap uri for your project. This will be a
     different process for every institution, so please follow your
     institution’s guidelines.
 
-5.  Download [R](https://www.r-project.org/) and
+6.  Download [R](https://www.r-project.org/) and
     [RStudio](https://posit.co/download/rstudio-desktop/)
 
-6.  Open the DSMC.Rproj file in the DSMC folder. This will open a
+7.  Open the DSMC.Rproj file in the DSMC folder. This will open a
     workspace.
 
-7.  Open the master_script.R file
+8.  Open the master_script.R file
 
     1.  Select File -\> Open File -\> R -\> master_script.R
 
-8.  Edit the necessary information at the top of the script
+9.  Edit the necessary information at the top of the script
 
     - redcap_uri
 
@@ -112,8 +122,8 @@ available by fall 2024.
 
     - drive_dir (parent folder to where DSMC is saved)
 
-9.  Source the master_script.R and fix any issues
+10. Source the master_script.R and fix any issues
 
-10. The open and closed reports will be in the data\output folder
+11. The open and closed reports will be in the data\output folder
 
 <img src="amia_poster_cic_2024_jc20240508.png" width="100%" />
