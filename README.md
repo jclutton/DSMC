@@ -32,7 +32,7 @@ Sample reports are available
 - Not all tables output to the powerpoint
 
 - There must be data in the REDCap database. If the project is missing
-  data in key spots, the code will throw an errorl
+  data in key spots, the code will throw an error.
 
 This project has not been thoroughly tested and might not work easily
 for your needs. It will require small updates to code and it might
