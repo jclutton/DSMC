@@ -89,7 +89,7 @@ add_table <- function(table){
             location = ph_location(left = left, top = 0))
   
   print(tables,
-        target = file.path(ppt_destination,'tables.pptx'))
+        target = file.path(output_data_dir,'open_tables.pptx'))
   
 }
 
