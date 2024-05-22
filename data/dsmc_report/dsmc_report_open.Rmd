@@ -8,125 +8,55 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-##### Declare Libraries #####
-library(rio)
-library(tidyverse)
-library(flextable)
-library(gtsummary)
-library(officedown)
-library(officer)
-
-
 #### Directories ####
-if(Sys.info()['user']=="vidon"){ #Eric's computer
-  root <- file.path('Z:')
-  user <- 'Eric'
-} else if(Sys.info()['sysname']=="Windows"){ #Jon's computer
-  root <- file.path('P:')
-  user <- 'Jon'
-} else {
-  error("This drive has not been set up yet.")
-}
+load(file = 'drives.Rdata')
+load(file = 'packages.Rdata')
+load(file = 'api_info.Rdata')
 
-drive_dir <- file.path(root,'IRB_STUDY0011132_Cohort','RIS_code')
+      
+##### Load Libraries ####
+lapply(packages, require, character.only = TRUE)
+      
+###.Rdata Info####
+data_date <- today()
 
-project_dir <- file.path(drive_dir,'DSMC')
-  script_dir <- file.path(project_dir,'R')
-  data_dir <- file.path(project_dir,'data')
-    raw_data_dir <- file.path(data_dir,'raw')
-    output_data_dir <- file.path(data_dir,'output')
-    dsmc_dir <- file.path(data_dir,'dsmc_report')
-      ppt_destination <- file.path(dsmc_dir,'tables_as_ppt')
+#### Source Support Scripts ####
+data_dictionary <- rio::import(file.path(codebook_dir,'data_dictionary.csv')) %>%
+  janitor::clean_names()
+source(file.path(script_dir,'support_functions.R'))
 
- ###.Rdata Info####
-data_date <- file.info(file.path(output_data_dir,'clean_data.Rdata')) %>%
-  select(mtime) %>%
-  mutate(mtime = format(mtime - days(1), '%b. %d, %Y')) %>%
-  pull()  
-    
-###### Load Data #####
-load(file.path(output_data_dir,'clean_data.Rdata'))
+##### REDCap database ######
+redcap_list <- get_data(token = token, redcap_uri = redcap_uri, unique_identifier = unique_identifier)
 
-##### COMET database (test entry removed) ######
-status_to_join <- look_up_table %>%
-      filter(field == "intervention_status") %>%
-      rename(Status = id_name) %>%
-      select(-field)
-    
-bold <- bold %>%
-  left_join(., status_to_join, by = c('intervention_status'='id_num')) 
-
-
-###### import ctcae categories and terms #######
-ctcae_categories <- import(file.path(data_dir,'dsmc_report','CTCAE_v5.0_categories.xlsx'))
-ctcae_terms <- import(file.path(data_dir,'dsmc_report','CTCAE_v5.0_terms.xlsx'))
-
-#### Adverse Event and EOI Databases ######
-#'20230822: Changed ctcae_term to be ae_event (the short description) if it's an "other" ctcae term. Check with team if they like that. JC
-#'
-ae_outcome_to_join <- look_up_table %>%
-  filter(field == "ae_outcome_2") %>%
-  select(-field)
+redcap <- redcap_list$df_return
+meta_data <- redcap_list$meta_data
+consort_data <- prep_consort(redcap, meta_data)
+screening_plot <- screening_consort(consort_data = consort_data, filepath = dsmc_dir)
+open_consort_plot <- open_consort(consort_data = consort_data, filepath = dsmc_dir)
 
 ae_master <- redcap %>%
   filter(!is.na(ae_date)) %>%
-  mutate(Related = case_when(ae_related == 0 ~ "Not Related",
-                             ae_related == 2 ~ "Possibly Related",
-                             ae_related == 1 ~ "Definitely Related")) %>%
-  left_join(., ctcae_categories, by = c("ae_ctcae_category" = "ctcae_identifier")) %>%
-  left_join(., ctcae_terms, by = c("ae_ctcae_term" = "ctcae_term_identifier")) %>%
-  mutate(ctcae_term = case_when(grepl("Other",ctcae_term,ignore.case=T) & str_length(ae_ctcase_term_oth) <= 50 ~ ae_ctcase_term_oth,
-                                T ~ ctcae_term)) %>%
-  mutate("SOC and Preferred Term" = case_when(!grepl("Other", ctcae_term) ~ paste(ctcae_category,"-",ctcae_term),
-                                              TRUE ~ ctcae_term)) %>%
-  left_join(., ae_outcome_to_join, by = c('ae_outcome_2'='id_num')) %>%
-  rename("Outcome" = "id_name") %>%
-  mutate(Serious = case_when(ae_was_ae_serious == 0 ~ "No",
-                             ae_was_ae_serious == 1 ~ "Yes")) %>%
-  mutate(Severity = case_when(ae_severity == 1 ~ "Grade 1; Mild",
-                              ae_severity == 2 ~ "Grade 2; Moderate",
-                              ae_severity == 3 ~ "Grade 3; Severe",
-                              ae_severity == 4 ~ "Grade 4; Life Threatening",
-                              ae_severity == 5 ~ "Grade 5; Death related to AE")) %>%
+  mutate(Related = ae_related,
+         ctcae_term = case_when(grepl("Other",ae_ctcae_term,ignore.case=T) & str_length(ae_ctcase_term_oth) <= 50 ~ ae_ctcase_term_oth,
+                                T ~ ae_ctcae_term)) %>%
+  mutate("SOC and Preferred Term" = case_when(!grepl("Other", ae_ctcae_term) ~ paste(ae_ctcae_category,"-",ae_ctcae_term),
+                                              TRUE ~ ae_ctcae_term)) %>%
+  rename("Outcome" = ae_outcome) %>%
+  mutate(Serious = ae_was_ae_serious) %>%
+  mutate(Severity = ae_severity) %>%
   mutate(ctcae_term = case_when(grepl("covid",ctcae_term,ignore.case=T) ~ "COVID-19",
-                                T ~ ctcae_term)) 
+                                T ~ ctcae_term))
 
 
 ##### import recruitment projections ####
-recruitment_projection <- import(file.path(data_dir,'codebooks','recruitment_projection.xlsx')) %>%
+recruitment_projection <- import(file.path(codebook_dir,'recruitment_projection.xlsx')) %>%
   mutate(week = week(ymd(Date)), year = year(ymd(Date)))
 
-##### Source consort diagram to use throughout document ####
-source(file.path(data_dir,'dsmc_report','dsmc_consort_generator_open.R'))
-
 ###### Date as of Report ####
-date_as_of <- data_date
-
-###### Last Report ######
-#' Notes from 20231117
-#' Function in utils package called menu
-#' Utils menu the dates <- store dates that are entered. Check 1 or 2 if they need to add a new date or use previous. 
-date_of_last_report <- ymd('2023-02-08')
+date_as_of <- format(Sys.time(), '%b %d, %Y')
 
 #### date of first screen ####
-first_screen <- min(ymd(bold$scrn_date), na.rm = T)-1
-
-#### Set Semester months ####
-semester_1 <- semesters$semester_1
-semester_2 <- semesters$semester_2
-year(today())
-
-last_semester_2_date <- ymd(paste0(year(today()),
-                              str_pad(as.character(first(semester_1)), side = "left", pad = "0", width = 2),
-                              "01")) - 1
-semester_2_string <- paste0(str_pad(as.character(month(last_semester_2_date)), side = "left", pad = "0", width = 2),
-                            day(last_semester_2_date))
-
-last_semester_1_date <- ymd(paste0(year(today()),
-                              str_pad(as.character(first(semester_2)), side = "left", pad = "0", width = 2),
-                              "01")) - 1
-semester_1_string <- paste0(str_pad(as.character(month(last_semester_1_date)), side = "left", pad = "0", width = 2),
-                                                 day(last_semester_1_date))
+first_screen <- min(ymd(redcap$scrn_date), na.rm = T)-1
 
 
 #### Testing PPTX Export ####
@@ -198,7 +128,7 @@ flextable(org_chart) %>%
 
 ## Brief Statement of Purpose of Trial
 
-Please add the purpose below to fit the needs of the BOLD project. 
+Please add the purpose below to fit the needs of your project. 
 
 
 \newline
@@ -224,19 +154,14 @@ knitr::include_graphics(file.path(data_dir,'dsmc_report','project_timeline.png')
 
 Date as of: `r date_as_of`
 
-\newline
-
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
-
-Recruitment start date: Sept 09, 2021
-
-```{r consorta, echo=FALSE, warning=FALSE, message=FALSE}
 
 
 
-knitr::include_graphics(file.path(data_dir,'dsmc_report','open_consort_screen.png'), dpi = 6.92) 
+```{r consorta, echo=FALSE, warning=FALSE, message=FALSE, out.width='700px'}
+
+
+
+knitr::include_graphics(file.path(data_dir,'dsmc_report','screening_consort.jpg')) 
 
 ```
 
@@ -246,19 +171,12 @@ knitr::include_graphics(file.path(data_dir,'dsmc_report','open_consort_screen.pn
 
 Date as of: `r date_as_of`
 
-\newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
-
-Recruitment start date: Sept 09, 2021
-
-```{r consortb, echo=FALSE, warning=FALSE, message=FALSE}
+```{r consortb, echo=FALSE, warning=FALSE, message=FALSE, out.width='700px'}
 
 
 
-knitr::include_graphics(file.path(data_dir,'dsmc_report','open_consort_enrolled.png'), dpi = 6.92) 
+knitr::include_graphics(file.path(data_dir,'dsmc_report','enrollment_consort_open.jpg')) 
 
 ```
 
@@ -270,9 +188,6 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r recruitment_graph, echo=FALSE, warning=FALSE, message=FALSE}
 
@@ -286,7 +201,7 @@ target <- recruitment_projection %>%
 
 
 ###### Dataframe on enrollment ###### 
-enrolled <- bold %>%
+enrolled <- redcap %>%
   mutate(week = isoweek(rand_date), year = year(rand_date)) %>%
   arrange(year, week) %>%
   group_by(week, year) %>%
@@ -300,8 +215,8 @@ enrolled <- bold %>%
 ###### Graph parameters for milestones #####
 ms_pct <- c(25,50,75,100)
 params <- data.frame(ms_pct,
-                     milestone = 280*(ms_pct/100),
-                     milestone_screen = 3*280*(ms_pct/100),
+                     milestone = max(recruitment_projection$`Enrollment Goal Cumulative`, na.rm = T)*(ms_pct/100),
+                     milestone_screen = max(recruitment_projection$`Screen Goal Cumulative`, na.rm = T)*(ms_pct/100),
                      xend = as.POSIXct(c(rep(NA,4))),
                      xend2 = as.POSIXct(c(rep(NA,4))))
 
@@ -310,10 +225,14 @@ for(i in 1:nrow(params)){
   params$xend2[i] <- target$Date[which.max(target$`Screening Target` >= params$milestone_screen[i])]
 }
 
+
+start_x <- (max(recruitment_projection$Date, na.rm = T) - min(recruitment_projection$Date, na.rm = T))*.1 + min(recruitment_projection$Date, na.rm = T)
+
+max_y_screen <- max(recruitment_projection$`Enrollment Goal Cumulative`, na.rm = T)
+
 ###### Graph of Enrollment #####
 enrollment_projection <- left_join(target, enrolled) %>%
   select(week, year, Enrolled, `Enrollment Target`, Date) %>%
- # filter(Date > "2021-09-27" & Date < "2025-03-31") %>%
   pivot_longer(., cols=-c(week,year, Date)) %>%
   arrange(name, Date) %>%
   rename(., Accrual = 'name',
@@ -324,16 +243,16 @@ enrollment_projection <- left_join(target, enrolled) %>%
   geom_line(aes(y=Counts, x=Date, group=Accrual, linetype=Accrual, col = Accrual), lwd = 1.5) +
   scale_linetype_manual(values=c("solid",'longdash')) +
   scale_color_manual(values=c("black","gray")) +
-  scale_y_continuous(limits = c(0, 300), breaks=seq(0,300,50), expand = c(0, 0)) +
-  geom_segment(aes(x=as.POSIXct("2021-10-04"), xend=params$xend[1], y=params$milestone[1], yend=params$milestone[1]), linetype="solid", color = "gray", size=.5) +
-  annotate("text", x=as.POSIXct("2022-02-06"), y=params$milestone[1]+5, label=paste0(params$ms_pct[1],"% Enrollment Milestone"), color="black", size=4) +
-  geom_segment(aes(x=as.POSIXct("2021-10-04"), xend=params$xend[2], y=params$milestone[2], yend=params$milestone[2]), linetype="solid", color = "gray", size=.5) +
-  annotate("text", x=as.POSIXct("2022-02-06"), y=params$milestone[2]+5, label=paste0(params$ms_pct[2],"% Enrollment Milestone"), color="black", size=4) +
-  geom_segment(aes(x=as.POSIXct("2021-10-04"), xend=params$xend[3], y=params$milestone[3], yend=params$milestone[3]), linetype="solid", color = "gray", size=.5) +
-  annotate("text", x=as.POSIXct("2022-02-06"), y=params$milestone[3]+5, label=paste0(params$ms_pct[3],"% Enrollment Milestone"), color="black", size=4) +
-  geom_segment(aes(x=as.POSIXct("2021-10-04"), xend=params$xend[4], y=params$milestone[4], yend=params$milestone[4]), linetype="solid", color = "gray", size=.5) +
-  annotate("text", x=as.POSIXct("2022-02-06"), y=params$milestone[4]+5, label=paste0(params$ms_pct[4],"% Enrollment Milestone"), color="black", size=4) +
-  ggtitle("BOLD Enrollment Progress") +
+  #scale_y_continuous(limits = c(0, max_y_screen), breaks=seq(0,max,50), expand = c(0, 0)) +
+  geom_segment(aes(x=start_x, xend=params$xend[1], y=params$milestone[1], yend=params$milestone[1]), linetype="solid", color = "gray", size=.5) +
+  annotate("text", x=start_x, y=params$milestone[1]+5, label=paste0(params$ms_pct[1],"% Enrollment Milestone"), color="black", size=4) +
+  geom_segment(aes(x=start_x, xend=params$xend[2], y=params$milestone[2], yend=params$milestone[2]), linetype="solid", color = "gray", size=.5) +
+  annotate("text", x=start_x, y=params$milestone[2]+5, label=paste0(params$ms_pct[2],"% Enrollment Milestone"), color="black", size=4) +
+  geom_segment(aes(x=start_x, xend=params$xend[3], y=params$milestone[3], yend=params$milestone[3]), linetype="solid", color = "gray", size=.5) +
+  annotate("text", x=start_x, y=params$milestone[3]+5, label=paste0(params$ms_pct[3],"% Enrollment Milestone"), color="black", size=4) +
+  geom_segment(aes(x=start_x, xend=params$xend[4], y=params$milestone[4], yend=params$milestone[4]), linetype="solid", color = "gray", size=.5) +
+  annotate("text", x=start_x, y=params$milestone[4]+5, label=paste0(params$ms_pct[4],"% Enrollment Milestone"), color="black", size=4) +
+  ggtitle("Enrollment Progress") +
   ylab("Cumulative Randomizations") +
   xlab("Year") +
   theme_bw() +
@@ -345,13 +264,13 @@ enrollment_projection <- left_join(target, enrolled) %>%
         legend.position = c(.85, .1),
         legend.title = element_blank()) 
 
-ggsave(file.path(data_dir,'dsmc_report','enrollment_projection.png'), enrollment_projection, scale = 1.1,width = 7, height = 4, units = "in")
+ggsave(file.path(data_dir,'dsmc_report','enrollment_projection.png'), enrollment_projection, scale = 1.1,width = 8, height = 4, units = "in")
 
 
 
 ###### Dataframe on enrollment ###### 
 
-ph_screen <- bold %>%
+ph_screen <- redcap %>%
   mutate(week = isoweek(scrn_date), year = year(scrn_date)) %>%
   arrange(year, week) %>%
   group_by(week, year) %>%
@@ -362,10 +281,13 @@ ph_screen <- bold %>%
   arrange(year, week) %>%
   mutate(Screened = cumsum(n))
 
+start_x <- (max(recruitment_projection$Date, na.rm = T) - min(recruitment_projection$Date, na.rm = T))*.1 + min(recruitment_projection$Date, na.rm = T)
+
+max_y_screen <- max(recruitment_projection$`Enrollment Goal Cumulative`, na.rm = T)
+
 ###### Graph of Phone Screens #####
 screen_projection <- left_join(target, ph_screen) %>%
   select(week, year, Screened, `Screening Target`, Date) %>%
-  filter(Date > "2021-09-27" & Date < "2025-03-31") %>%
   pivot_longer(., cols=-c(week,year, Date)) %>%
   arrange(name, Date) %>%
   rename(., Accrual = 'name',
@@ -376,17 +298,17 @@ screen_projection <- left_join(target, ph_screen) %>%
   geom_line(aes(y=Counts, x=Date, group=Accrual, linetype=Accrual, col = Accrual), lwd = 1.5) +
   scale_linetype_manual(values=c("solid",'longdash')) +
   scale_color_manual(values=c("black","gray")) +
-  scale_y_continuous(limits = c(0, 900), breaks=seq(0,900,100), expand = c(0, 0)) +
-  geom_segment(aes(x=as.POSIXct("2021-10-04"), xend=params$xend[1], y=params$milestone_screen[1], yend=params$milestone_screen[1]), linetype="solid", color = "gray", size=.5) +
-  annotate("text", x=as.POSIXct("2022-02-06"), y=params$milestone_screen[1]+10, label=paste0(params$ms_pct[1],"% Screening Milestone"), color="black", size=3.75) +
-  geom_segment(aes(x=as.POSIXct("2021-10-04"), xend=params$xend[2], y=params$milestone_screen[2], yend=params$milestone_screen[2]), linetype="solid", color = "gray", size=.5) +
-  annotate("text", x=as.POSIXct("2022-02-06"), y=params$milestone_screen[2]+10, label=paste0(params$ms_pct[2],"% Screening Milestone"), color="black", size=3.75) +
-  geom_segment(aes(x=as.POSIXct("2021-10-04"), xend=params$xend[3], y=params$milestone_screen[3], yend=params$milestone_screen[3]), linetype="solid", color = "gray", size=.5) +
-  annotate("text", x=as.POSIXct("2022-02-06"), y=params$milestone_screen[3]+10, label=paste0(params$ms_pct[3],"% Screening Milestone"), color="black", size=3.75) +
-  geom_segment(aes(x=as.POSIXct("2021-10-04"), xend=params$xend[4], y=params$milestone_screen[4], yend=params$milestone_screen[4]), linetype="solid", color = "gray", size=.5) +
-  annotate("text", x=as.POSIXct("2022-02-06"), y=params$milestone_screen[4]+10, label=paste0(params$ms_pct[4],"% Screening Milestone"), color="black", size=3.75) +
-  ggtitle("BOLD Phone Screening Progress") +
-  ylab("Cumulative Phone Screening Performed") +
+  #scale_y_continuous(limits = c(0, max_y_screen), breaks=seq(0,max,50), expand = c(0, 0)) +
+  geom_segment(aes(x=start_x, xend=params$xend2[1], y=params$milestone_screen[1], yend=params$milestone_screen[1]), linetype="solid", color = "gray", size=.5) +
+  annotate("text", x=start_x, y=params$milestone_screen[1]+5, label=paste0(params$ms_pct[1],"% Screening Milestone"), color="black", size=4) +
+  geom_segment(aes(x=start_x, xend=params$xend2[2], y=params$milestone_screen[2], yend=params$milestond_screen[2]), linetype="solid", color = "gray", size=.5) +
+  annotate("text", x=start_x, y=params$milestone_screen[2]+5, label=paste0(params$ms_pct[2],"% Screening Milestone"), color="black", size=4) +
+  geom_segment(aes(x=start_x, xend=params$xend2[3], y=params$milestone_screen[3], yend=params$milestone_screen[3]), linetype="solid", color = "gray", size=.5) +
+  annotate("text", x=start_x, y=params$milestone_screen[3]+5, label=paste0(params$ms_pct[3],"% Screening Milestone"), color="black", size=4) +
+  geom_segment(aes(x=start_x, xend=params$xend2[4], y=params$milestone_screen[4], yend=params$milestone_screen[4]), linetype="solid", color = "gray", size=.5) +
+  annotate("text", x=start_x, y=params$milestone_screen[4]+5, label=paste0(params$ms_pct[4],"% Screening Milestone"), color="black", size=4) +
+  ggtitle("Screening Progress") +
+  ylab("Cumulative Screens") +
   xlab("Year") +
   theme_bw() +
   theme(plot.title = element_text(hjust = 0.5),
@@ -394,10 +316,10 @@ screen_projection <- left_join(target, ph_screen) %>%
         plot.background = element_blank(),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
-        legend.position = c(.89, .1),
+        legend.position = c(.85, .1),
         legend.title = element_blank()) 
 
-ggsave(file.path(data_dir,'dsmc_report','screen_projection.png'), screen_projection, scale = 1.1,width = 7, height = 4, units = "in")
+ggsave(file.path(data_dir,'dsmc_report','screen_projection.png'), screen_projection, scale = 1.1,width = 8, height = 4, units = "in")
 
 ### load graphs
 knitr::include_graphics(file.path(data_dir,'dsmc_report','screen_projection.png'), dpi = 7) 
@@ -415,21 +337,18 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_1, echo=FALSE, warning=FALSE, message=FALSE}
 #all of these numbers are calculated in dsmc_consort_generator_open.R
 #Code was updated to pull from dsmc_consort_generator on 7/5/22
 
-enrolled <- nrow(randomized)
-preint <- nrow(randomized %>% filter(is.na(intervention_status)))
-active <- nrow(randomized %>% filter(intervention_status == 1))
-completed_num <- nrow(completed)
-withdrawn_but_willing <- nrow(withdrawn_testing)
-withdrawn_not_willing <- nrow(withdrawn_no_testing)
-lost_to_followup <- nrow(lost)
+enrolled <- nrow(consort_data$randomized)
+preint <- nrow(consort_data$randomized %>% filter(is.na(intervention_status)))
+active <- nrow(consort_data$active)
+completed_num <- nrow(consort_data$completed)
+withdrawn_but_willing <- nrow(consort_data$withdrawn_testing)
+withdrawn_not_willing <- nrow(consort_data$withdrawn_no_testing)
+lost_to_followup <- nrow(consort_data$lost)
 
 table_1 <- data.frame(Status = c("Pre-Intervention", "Active", "Completed", "Discontinued Treatment/Follow-up Continued", "Discontinued from Study", "Lost to Follow-up"), 
                       N = c(preint, active, completed_num, withdrawn_but_willing, withdrawn_not_willing, lost_to_followup)) %>%
@@ -453,14 +372,10 @@ table1
 #all of these numbers are calculated in dsmc_consort_generator_open.R
 #Code was updated to pull from dsmc_consort_generator on 7/5/22
 
-withdraw_rsn_to_join <- look_up_table %>%
-  filter(field == "withdraw_rsn") %>%
-  select(-field)
-
-reasons <- withdrawn_testing %>%
-  bind_rows(., withdrawn_no_testing) %>%
-  left_join(., withdraw_rsn_to_join, by = c('withdraw_rsn' = 'id_num')) %>%
-  rename(Reason = 'id_name') %>%
+reasons <- consort_data$withdrawn_testing %>%
+  bind_rows(., consort_data$withdrawn_no_testing) %>%
+  mutate(Reason = case_when(withdraw_rsn == "Other" ~ withdraw_rsn_otx,
+                            T ~ withdraw_rsn)) %>%
   select(Reason)
 
 if(nrow(reasons) > 0){
@@ -485,16 +400,14 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ### Phone-screen Screen Fails: By Race
 
 ```{r table_2a, echo=FALSE, warning=FALSE, message=FALSE}
 
 #### Screen Fail Pre Consent #####
-screen_fail_reason_pre_consent <- screen_fail_reason_temp %>%
+screen_fail_reason_pre_consent <- consort_data$screen_failed %>%
+  rename(Reason = ieq_scrnfail_rsn) %>%
   select(Reason, race)
 
 
@@ -517,9 +430,6 @@ gtsummary::tbl_summary(screen_fail_reason_pre_consent, by = race) %>%
 ```{r table_2b, echo=FALSE, warning=FALSE, message=FALSE}
 
 #### Screen Fail Pre Consent #####
-screen_fail_reason_pre_consent <- screen_fail_reason_temp %>%
-  select(Reason, race) 
-
 gt_summary_table <- screen_fail_reason_pre_consent %>%
   gtsummary::tbl_summary(.,
                          by = race, 
@@ -530,7 +440,7 @@ gt_summary_table <- screen_fail_reason_pre_consent %>%
 #The gtsummary package is limited with available statistic calculation
 #modify_table isolates the table from the gtsummary list and changes each statistic to be n (n/number consented)
 modify_table <- gt_summary_table$table_body %>%
-  mutate(across(contains("stat"), ~ case_when(!is.na(.x) ~ paste0(.x," (",as.character(round(as.numeric(.x)/nrow(screened)*100), digits = 0),"%)"))))
+  mutate(across(contains("stat"), ~ case_when(!is.na(.x) ~ paste0(.x," (",as.character(round(as.numeric(.x)/nrow(consort_data$screened)*100), digits = 0),"%)"))))
 
 #Insert the modified table back into gtsummary list
 gt_summary_table$table_body <- modify_table 
@@ -541,7 +451,7 @@ gt_summary_table %>%
   modify_footnote(all_stat_cols() ~ "n (%)") %>%
   as_flex_table() %>%
   align(align = "center", part = "header") %>%
-  add_header_lines(paste0("Phone-screen Screen Fails (Total Screened = ",nrow(screened),")")) %>%
+  add_header_lines(paste0("Phone-screen Screen Fails (Total Screened = ",nrow(consort_data$screened),")")) %>%
   add_footer_lines(., "n - Number of listed screen-fail reason. \n\n(%) - Percent is calculated by dividing the number of a given reason (n) by the total number of phone screens (N).This percentage includes all eligible and still screening participants.") %>%
   fontsize(., size = 9, part = "all") %>%
   set_table_properties(., layout = "autofit", width = 1)
@@ -557,7 +467,9 @@ gt_summary_table %>%
 ```{r table_2c, echo=FALSE, warning=FALSE, message=FALSE}
 
 #### Screen Fail Post Consent #####
-screen_fail_after_consent_reason_dsmc <- screen_fail_after_consent_reason_temp %>%
+screen_fail_after_consent_reason_dsmc <- consort_data$screen_failed_after_consent %>%
+  mutate(Reason = case_when(!is.na(baseline_scrnfail_ie) ~ baseline_scrnfail_ie,
+                            !is.na(baseline_scrnfail_nocont) ~ baseline_scrnfail_nocont)) %>%
   select(Reason, race)
 
 gtsummary::tbl_summary(screen_fail_after_consent_reason_dsmc, by = race) %>%
@@ -579,9 +491,6 @@ gtsummary::tbl_summary(screen_fail_after_consent_reason_dsmc, by = race) %>%
 ```{r table_2d, echo=FALSE, warning=FALSE, message=FALSE}
 
 #### Screen Fail Post Consent #####
-screen_fail_after_consent_reason_dsmc <- screen_fail_after_consent_reason_temp %>%
-  select(Reason, race)
-
 table_2d <- screen_fail_after_consent_reason_dsmc %>%
   gtsummary::tbl_summary(.,
                          by = race, 
@@ -592,7 +501,7 @@ table_2d <- screen_fail_after_consent_reason_dsmc %>%
 #The gtsummary package is limited with available statistic calculation
 #modify_table isolates the table from the gtsummary list and changes each statistic to be n (n/number consented)
 modify_table <- table_2d$table_body %>%
-  mutate(across(contains("stat"), ~ case_when(!is.na(.x) ~ paste0(.x," (",as.character(round(as.numeric(.x)/nrow(consented)*100), digits = 0),"%)"))))
+  mutate(across(contains("stat"), ~ case_when(!is.na(.x) ~ paste0(.x," (",as.character(round(as.numeric(.x)/nrow(consort_data$consented)*100), digits = 0),"%)"))))
 
 #Insert the modified table back into gtsummary list
 table_2d$table_body <- modify_table 
@@ -604,7 +513,7 @@ table_2d %>%
   as_flex_table() %>%
   fontsize(., size = 10, part = "all") %>%
   align(align = "center", part = "header") %>%
-  add_header_lines(., paste0("Post-consent Screen Fails (Total Consented = ",nrow(consented),")")) %>%
+  add_header_lines(., paste0("Post-consent Screen Fails (Total Consented = ",nrow(consort_data$consented),")")) %>%
   add_footer_lines(., "n - Number of listed screen-fail reason. \n\n(%) - Percent is calculated by dividing the number of a given reason (n) by the total number of consents. This percentage includes all eligible and still screening participants.") %>%
   set_table_properties(., layout = "autofit", width = 1)
 
@@ -619,43 +528,6 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
-
-```{r table_4, echo=FALSE, warning=FALSE, message=FALSE, include = FALSE}
-#20230627: This was the old reporting method. Updated today. JC
-#Source  https://www.ers.usda.gov/data-products/rural-urban-commuting-area-codes/
-#Updated on 8/18/22 with list from EDV
-rural_zips <- import(file.path(data_dir,'dsmc_report','forhp-eligible-zips.xlsx')) %>%
-  pull(ZIP_CODE)
-
-enrolled_df <- randomized 
-
-test <- enrolled_df  %>%
-  mutate(Rural = case_when(scrn_address_zip %in% rural_zips ~ "Rural",
-                           T ~ "Not Rural")) %>%
-  select(race, ethnicity, sex, Rural, age) %>%
-  rename(Race = race, Ethnicity = ethnicity, Sex = sex, Age = age)
-
-table_3a <- gtsummary::tbl_summary(test,
-                                   statistic = all_continuous() ~ "{mean}, ({sd})",
-                                   type = list(Age ~ "continuous")) %>%
-  modify_header(label ~ " ") %>%
-  as_flex_table() %>%
-  autofit()
-
-table_3a 
-
-add_table(table_3a)
-
-
-
-
-
-
-```
-
 ```{r table_4_2, echo=FALSE, warning=FALSE, message=FALSE, results='asis', fig.width=8}
 #' 20230627: This section was rewritten to accomodate DSMC feedback. JC
 
@@ -666,7 +538,7 @@ rural_zips <- import(file.path(data_dir,'dsmc_report','forhp-eligible-zips.xlsx'
   pull(ZIP_CODE)
 
 #### Since Last Report ####
-dems_since_last_report <- randomized %>%
+dems_since_last_report <- consort_data$randomized %>%
   mutate(Rural = case_when(scrn_address_zip %in% rural_zips ~ "Rural",
                            T ~ "Not Rural")) %>%
   mutate(updates = case_when(rand_date < date_of_last_report ~ "Cumulative at Last Report",
@@ -706,14 +578,15 @@ rural_zips <- import(file.path(data_dir,'dsmc_report','forhp-eligible-zips.xlsx'
   pull(ZIP_CODE)
 
 
-
-dems_every_6mo <- randomized %>%
+dems_every_6mo <- consort_data$randomized %>%
   mutate(Rural = case_when(scrn_address_zip %in% rural_zips ~ "Rural",
                            T ~ "Not Rural"))  %>%
   mutate(month = month(rand_date),
          year = year(rand_date)) %>%
-  mutate(biyear = case_when(month %in% semester_1 ~ mdy(paste0(semester_1_string,year)),
-                            month %in% semester_2 ~ mdy(paste0(semester_2_string,year)))) %>%
+  mutate(biyear = case_when(rand_date > today() - months(6) ~ as.character(today()),
+                            rand_date > today() - months(12) ~ as.character(today() - months(6)),
+                            rand_date > today() - months(18) ~ as.character(today() - months(12)),
+                            rand_date < today() - months(18) ~ paste0("Before ",today() - months(18)))) %>%
   select(race, ethnicity, sex, Rural, age, biyear) %>%
   rename(Race = race, Ethnicity = ethnicity, Sex = sex, Age = age)
 
@@ -721,6 +594,7 @@ table_3a_2 <- gtsummary::tbl_summary(dems_every_6mo,
                                      by = biyear,
                                      statistic = all_continuous() ~ "{mean}, ({sd})",
                                      type = list(Age ~ "continuous")) %>%
+  add_overall() %>%
   modify_header(label ~ " ") %>%
   as_flex_table() %>%
   add_header_lines("Enrollment Demographics - Group by Reporting Period") %>%
@@ -743,10 +617,6 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
-
 ```{r screened_dems, echo=FALSE, warning=FALSE, message=FALSE}
 
 #Source  https://www.ers.usda.gov/data-products/rural-urban-commuting-area-codes/
@@ -754,9 +624,7 @@ Date of report: `r format(Sys.time(), '%b %d, %Y')`
 rural_zips <- import(file.path(data_dir,'dsmc_report','forhp-eligible-zips.xlsx')) %>%
   pull(ZIP_CODE)
 
-screened_df <- screened
-
-test <- screened_df  %>%
+test <- consort_data$screened %>%
   mutate(Rural = case_when(scrn_address_zip %in% rural_zips ~ "Rural",
                            T ~ "Not Rural")) %>%
   mutate(updates = case_when(scrn_date < date_of_last_report ~ "Cumulative at Last Report",
@@ -795,13 +663,15 @@ add_table(table_3b)
 rural_zips <- import(file.path(data_dir,'dsmc_report','forhp-eligible-zips.xlsx')) %>%
   pull(ZIP_CODE)
 
-dems_every_6mo <- screened %>%
+dems_every_6mo <- consort_data$screened %>%
   mutate(Rural = case_when(scrn_address_zip %in% rural_zips ~ "Rural",
                            T ~ "Not Rural"))  %>%
-  mutate(month = month(scrn_date),
-         year = year(scrn_date)) %>%
-  mutate(biyear = case_when(month %in% semester_1 ~ mdy(paste0(semester_1_string,year)),
-                            month %in% semester_2 ~ mdy(paste0(semester_2_string,year)))) %>%
+  mutate(month = month(rand_date),
+         year = year(rand_date)) %>%
+  mutate(biyear = case_when(rand_date > today() - months(6) ~ as.character(today()),
+                            rand_date > today() - months(12) ~ as.character(today() - months(6)),
+                            rand_date > today() - months(18) ~ as.character(today() - months(12)),
+                            rand_date < today() - months(18) ~ paste0("Before ",today() - months(18)))) %>%
   select(race, ethnicity, sex, Rural, age, biyear) %>%
   rename(Race = race, Ethnicity = ethnicity, Sex = sex, Age = age)
 
@@ -809,6 +679,7 @@ table_3b_2 <- gtsummary::tbl_summary(dems_every_6mo,
                                      by = biyear,
                                      statistic = all_continuous() ~ "{mean}, ({sd})",
                                      type = list(Age ~ "continuous")) %>%
+  add_overall() %>%
   modify_header(label ~ " ") %>%
   as_flex_table() %>%
   add_header_lines("Screened Demographics - Group by Reporting Period") %>%
@@ -871,19 +742,11 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_3a, echo=FALSE, warning=FALSE, message=FALSE}
-violations_to_join <- look_up_table %>%
-  filter(field == "deviation_type") %>%
-  select(-field) %>%
-  rename(`Protocol Violation` = 'id_name')
 
-violations <- bold %>%
-  filter(ae_dev_or_vio == 2) %>%
-  left_join(., violations_to_join, by = c('deviation_type' = 'id_num'))
+violations <- redcap %>%
+  filter(ae_dev_or_vio == "Violation") 
 
 protocol_violations <- violations %>%
   group_by(`Protocol Violation`) %>%
@@ -894,27 +757,27 @@ violations_after_last_report <- violations %>%
   filter(deviation_date > date_of_last_report) %>%
   group_by(`Protocol Violation`) %>%
   count() %>%
-  rename(`Since Last DSMC Report` = n)
+  rename(`Since Last Report` = n)
 
 total_violations <- sum(protocol_violations$n)
-total_violations_after_last_report <- sum(violations_after_last_report$`Since Last DSMC Report`)
+total_violations_after_last_report <- sum(violations_after_last_report$`Since Last Report`)
 
-consented_since_last_report <- bold %>%
+consented_since_last_report <- redcap %>%
   filter(consent_date > date_of_last_report) %>%
   nrow(.)
 
 table_3a <- protocol_violations %>%
   left_join(., violations_after_last_report) %>%
   ungroup() %>%
-  add_row(`Protocol Violation` = "Total # of Violations", n = total_violations, `Since Last DSMC Report` = total_violations_after_last_report) %>%
-  add_row(`Protocol Violation` = "Participants Consented", n = nrow(consented), `Since Last DSMC Report` = consented_since_last_report) %>%
-  add_row(`Protocol Violation` = "Violations per Participant", n = round(total_violations / nrow(consented), digits = 2), `Since Last DSMC Report` = round(total_violations_after_last_report / consented_since_last_report, digits = 2))
+  add_row(`Protocol Violation` = "Total # of Violations", n = total_violations, `Since Last Report` = total_violations_after_last_report) %>%
+  add_row(`Protocol Violation` = "Participants Consented", n = nrow(consort_data$consented), `Since Last Report` = consented_since_last_report) %>%
+  add_row(`Protocol Violation` = "Violations per Participant", n = round(total_violations / nrow(consort_data$consented), digits = 2), `Since Last Report` = round(total_violations_after_last_report / consented_since_last_report, digits = 2))
 
 
 table_3a_2 <- table_3a %>%
   flextable() %>%
   theme_booktabs() %>%
-  #hline(i = nrow(table_3a)-3) %>%
+  hline(i = nrow(table_3a)-3) %>%
   autofit() 
 
 table_3a_2 
@@ -932,19 +795,11 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
-
 ```{r table_3b, echo=FALSE, warning=FALSE, message=FALSE}
-deviations_to_join <- look_up_table %>%
-  filter(field == "deviation_type") %>%
-  select(-field) %>%
-  rename(`Protocol Deviation` = 'id_name')
 
-deviations <- bold %>%
-  filter(ae_dev_or_vio == 1) %>%
-  left_join(., deviations_to_join, by = c('deviation_type' = 'id_num'))
+deviations <- redcap %>%
+  filter(ae_dev_or_vio == "Deviation") %>%
+    rename(`Protocol Deviation` = `Protocol Violation`) 
 
 
 protocol_deviations <- deviations %>%
@@ -961,7 +816,7 @@ deviations_after_last_report <- deviations %>%
 total_deviations <- sum(protocol_deviations$n)
 total_deviations_after_last_report <- sum(deviations_after_last_report$`Since Last DSMC Report`)
 
-consented_since_last_report <- bold %>%
+consented_since_last_report <- redcap %>%
   filter(consent_date > date_of_last_report) %>%
   nrow(.)
 
@@ -969,16 +824,15 @@ table_3b <- protocol_deviations %>%
   left_join(., deviations_after_last_report) %>%
   ungroup() %>%
   add_row(`Protocol Deviation` = "Total # of Deviations", n = total_deviations, `Since Last DSMC Report` = total_deviations_after_last_report) %>%
-  add_row(`Protocol Deviation` = "Participants Consented", n = nrow(consented), `Since Last DSMC Report` = consented_since_last_report) %>%
-  add_row(`Protocol Deviation` = "Deviations per Participant", n = round(total_deviations / nrow(consented), digits = 2), `Since Last DSMC Report` = round(total_deviations_after_last_report / consented_since_last_report, digits = 2))
+  add_row(`Protocol Deviation` = "Participants Consented", n = nrow(consort_data$consented), `Since Last DSMC Report` = consented_since_last_report) %>%
+  add_row(`Protocol Deviation` = "Deviations per Participant", n = round(total_deviations / nrow(consort_data$consented), digits = 2), `Since Last DSMC Report` = round(total_deviations_after_last_report / consented_since_last_report, digits = 2))
 
 
 table_3b %>%
   flextable() %>%
   theme_booktabs() %>%
-  #hline(i = nrow(table_3b)-3) %>%
+  hline(i = nrow(table_3b)-3) %>%
   autofit() 
-
 
 
 ```
@@ -991,18 +845,13 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
 
 ```{r listing_1_protocol_violation, echo=FALSE, warning=FALSE, message=FALSE}
 
 listing_1_pv <- violations %>%
-  filter(ae_dev_or_vio == 2) %>%
   filter(deviation_date_indentified >= date_of_last_report) %>%
-
-  mutate(`Resulted in AE` = case_when(deviation_ae == 1 ~ "Yes",
-                                      deviation_ae == 0 ~ "No")) %>%
-  mutate(`Participant Continued` = case_when(deviation_pt_continue == 1 ~ "Yes",
-                                             deviation_pt_continue == 0 ~ "No")) %>%
+  mutate(`Resulted in AE` = deviation_ae) %>%
+  mutate(`Participant Continued` = deviation_pt_continue) %>%
   select(deviation_date, `Protocol Violation`, `Resulted in AE`, `Participant Continued`, deviation_description) %>%
   rename("Date" = deviation_date, "Notes" = deviation_description) %>%
   arrange(Date)
@@ -1028,19 +877,15 @@ if(nrow(listing_1_pv) > 0) {
 
 Date as of: `r date_as_of`
 
-\newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
 
 ```{r all_protocol_violations, echo=FALSE, warning=FALSE, message=FALSE}
 
 
 
 all_violations <- violations %>%
-  mutate(`Resulted in AE` = case_when(deviation_ae == 1 ~ "Yes",
-                                      deviation_ae == 0 ~ "No")) %>%
-  mutate(`Participant Continued` = case_when(deviation_pt_continue == 1 ~ "Yes",
-                                             deviation_pt_continue == 0 ~ "No")) %>%
+  mutate(`Resulted in AE` = deviation_ae) %>%
+  mutate(`Participant Continued` = deviation_pt_continue) %>%
   select(deviation_date, `Protocol Violation`, `Resulted in AE`, `Participant Continued`, deviation_description) %>%
   rename("Date" = deviation_date, "Notes" = deviation_description) %>%
   arrange(Date)
@@ -1055,92 +900,6 @@ if(nrow(all_violations) > 0) {
 } else {
   cat("There have been no violations.")
 }
-
-
-
-```
-
-\newpage
-
-## Table 6: Data Counts
-
-This section will not work. Would need to be rewritten specifically for BOLD project. 
-
-Date as of: `r date_as_of`
-
-\newline
-
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-```{r data_counts, echo=FALSE, warning=FALSE, message=FALSE, eval=FALSE}
-
-
-expected_baseline <- randomized %>%
-  mutate(record_id = as.character(record_id))
-
-expected_week_26 <- comet %>%
-  mutate(final_date = case_when(intervention_status == 1 ~ today(),
-                                intervention_status == 2 ~ today(),
-                                intervention_status == 3 ~ today(),
-                                intervention_status == 4 ~ int_withdrew_date,
-                                intervention_status == 5 ~ int_losttofollowup_date)) %>%
-  filter(final_date >= comet_week26date + days(12))
-
-expected_week_52 <- comet %>%
-  mutate(final_date = case_when(intervention_status == 1 ~ today(),
-                                intervention_status == 2 ~ today(),
-                                intervention_status == 3 ~ today(),
-                                intervention_status == 4 ~ int_withdrew_date,
-                                intervention_status == 5 ~ int_losttofollowup_date)) %>%
-  filter(final_date >= comet_week52date + days(12))
-
-baseline_tests <- randomized %>%
-  select(record_id, redcap_event_name, cog_date, mri_date, ex_dxa_date, ex_1rm_staff, ex_gxt_staff, barse_1, ex_blood_1_time) %>%
-  mutate(across(.cols = c("cog_date", "mri_date", "ex_dxa_date", "ex_1rm_staff", "ex_gxt_staff", "barse_1", "ex_blood_1_time"),
-                .fns = ~ ifelse(!is.na(.x) == TRUE, 1, 0))) %>%
-  mutate(record_id = as.character(record_id)) 
-
-
-week_26_tests <- comet %>%
-  filter(redcap_event_name == "week_26_arm_1") %>%
-  filter(record_id %in% expected_week_26$record_id) %>%
-  select(record_id, redcap_event_name, cog_date, barse_1) %>%
-  mutate(across(.cols = c("cog_date", "barse_1"),
-                .fns = ~ ifelse(!is.na(.x) == TRUE, 1, 0))) 
-
-
-week_52_tests <- comet %>%
-  filter(redcap_event_name == "week_52_arm_1") %>%
-  filter(record_id %in% expected_week_52$record_id) %>%
-  select(record_id, redcap_event_name, cog_date, mri_date, ex_dxa_date, ex_1rm_staff, ex_gxt_staff, barse_1, ex_blood_1_time) %>%
-  mutate(across(.cols = c("cog_date", "mri_date", "ex_dxa_date", "ex_1rm_staff", "ex_gxt_staff", "barse_1", "ex_blood_1_time"),
-                .fns = ~ ifelse(!is.na(.x) == TRUE, 1, 0))) %>%
-  mutate(record_id = as.character(record_id)) 
-
-baseline_name <- paste0("Baseline (N=",nrow(expected_baseline),")")
-week_26_name <- paste0("Week 26 (N=",nrow(expected_week_26),")")
-week_52_name <- paste0("Week 56 (N=",nrow(expected_week_52),")")
-
-data_counts <- data.frame(Measure = c("Cognitive Testing – 1º", "MRI – 2º", "GXT – 2º", "1-RM – 2º", "DXA – 2º", "Home Survey Battery – 2º", "Phlebotomy – eº"),
-                          Baseline = c(sum(baseline_tests$cog_date), sum(baseline_tests$mri_date), sum(baseline_tests$ex_gxt_staff), sum(baseline_tests$ex_1rm_staff), sum(baseline_tests$ex_dxa_date), sum(baseline_tests$barse_1), sum(baseline_tests$ex_blood_1_time)),
-                          week_26 = c(sum(week_26_tests$cog_date), NA, NA, NA, NA, sum(week_26_tests$barse_1), NA),
-                          week_52 = c(sum(week_52_tests$cog_date), sum(week_52_tests$mri_date), sum(week_52_tests$ex_gxt_staff), sum(week_52_tests$ex_1rm_staff), sum(week_52_tests$ex_dxa_date), sum(week_52_tests$barse_1), sum(week_52_tests$ex_blood_1_time))) %>%
-  rename(!!baseline_name := Baseline, !!week_26_name := week_26, !!week_52_name := week_52)
-
-
-
-table_6 <- data_counts %>% 
-  flextable() %>% 
-  add_header_lines(., "Data Counts – Primary and Secondary Measures") %>% 
-  add_footer_lines(., "1º primary outcome, 2º secondary outcome, eº exploratory measure") %>%
-  add_footer_lines(paste0("Data counts reflect the database as of ",data_date,". Some missing data are expected as tests are ongoing and data continue to be entered.")) %>%
-  align(align = "center", part = "header") %>%
-  theme_booktabs() %>%
-  set_table_properties(., layout = "autofit", width = 1)
-
-table_6
-
-add_table(table_6)
 
 
 
@@ -1194,15 +953,12 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_6_events_conditional, echo=FALSE, warning=FALSE, message=FALSE, fig.width=8}
 
 
 adverse_events_6 <- ae_master %>%
-  filter(ae_related == 0) %>% 
+  filter(ae_related == "Not Related") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
   select(ctcae_term, updates) %>%
@@ -1216,8 +972,6 @@ criteria <- nrow(adverse_events_6) > 0
 print("There have been no non-related adverse events.")
 
 ```
-
-
 ```{r table_6_events_summary, echo=FALSE, warning=FALSE, message=FALSE, fig.width=8, eval=criteria}
 
   table_7a <- gtsummary::tbl_summary(adverse_events_6,
@@ -1238,32 +992,36 @@ add_table(table_7a)
 
 \newpage
 
+
 ```{r table_6_events_6mo, echo=FALSE, warning=FALSE, message=FALSE, fig.width=8, eval=criteria}
 #' 20230822: Adding in response to DSMC notes. JC
+#' 
+#' 
 
-adverse_events_6 <- ae_master %>%
-  filter(ae_related == 0) %>% 
+adverse_events_6_2 <- ae_master %>%
+  filter(ae_related == "Not Related") %>% 
   mutate(month = month(ae_date),
          year = year(ae_date)) %>%
-  mutate(updates = case_when(month %in% semester_2 ~ mdy(paste0("0831",year)),
-                             month %in% semester_1 ~ mdy(paste0("0228",year+1)),
-                             month == 1 | month == 2 ~ mdy(paste0("0228",year)))) %>%
+  mutate(updates = case_when(ae_date > today() - months(6) ~ as.character(today()),
+                            ae_date > today() - months(12) ~ as.character(today() - months(6)),
+                            ae_date > today() - months(18) ~ as.character(today() - months(12)),
+                            ae_date < today() - months(18) ~ paste0("Before ",today() - months(18)))) %>%
   select(ctcae_term, updates) %>%
   rename("Preferred Term" = ctcae_term)
 
-  table_7a_2 <- gtsummary::tbl_summary(adverse_events_6,
-                                       by = updates,
-                                       sort = everything() ~ "frequency") %>%
-    modify_header(label ~ "Adverse Events") %>%
-    as_flex_table() %>%
-    align(align = "center", part = "header") %>%
-    add_header_lines(., "Non-related Adverse Events - Group by Reporting Period") %>%
-    add_footer_lines(., "If a reporting period is not included, no related adverse events happened during that period.") %>%
-    set_table_properties(., layout = "autofit", width = 1)
-  
-  table_7a_2
-  
-  add_table(table_7a_2)
+table_7a_2 <- gtsummary::tbl_summary(adverse_events_6_2,
+                                     by = updates,
+                                     sort = everything() ~ "frequency") %>%
+  modify_header(label ~ "Adverse Events") %>%
+  as_flex_table() %>%
+  align(align = "center", part = "header") %>%
+  add_header_lines(., "Non-related Adverse Events - Group by Reporting Period") %>%
+  add_footer_lines(., "If a reporting period is not included, no related adverse events happened during that period.") %>%
+  set_table_properties(., layout = "autofit", width = 1)
+
+table_7a_2
+
+add_table(table_7a_2)
 
 
 
@@ -1275,8 +1033,8 @@ adverse_events_6 <- ae_master %>%
 ```{r table_6_listing, echo=FALSE, warning=FALSE, message=FALSE, eval = criteria}
 
 
-adverse_event_6_listing <- ae_master %>%
-  filter(ae_related == 0) %>% 
+adverse_event_6_listing <- ae_master  %>%
+  filter(ae_related == "Not Related") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
   filter(ae_date >= date_of_last_report) %>%
@@ -1305,14 +1063,11 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 ```{r table_6b_events_cond, echo=FALSE, warning=FALSE, message=FALSE}
 
 
 adverse_events_6 <- ae_master %>%
-  filter(ae_related != 0) %>%
+  filter(ae_related != "Not Related") %>%
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
   select(ctcae_term, updates) %>%
@@ -1336,7 +1091,7 @@ print("There have been no related adverse events")
 
 
 adverse_events_6 <- ae_master %>%
-  filter(ae_related != 0) %>%
+  filter(ae_related != "Not Related") %>%
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
   select(ctcae_term, updates) %>%
@@ -1367,12 +1122,11 @@ adverse_events_6 <- ae_master %>%
 #' 20230822: Adding in response to DSMC notes. JC
 
 adverse_events_6 <- ae_master %>%
-  filter(ae_related != 0) %>% 
-  mutate(month = month(ae_date),
-         year = year(ae_date)) %>%
-  mutate(updates = case_when(month %in% semester_2 ~ mdy(paste0("0831",year)),
-                             month %in% semester_1 ~ mdy(paste0("0228",year+1)),
-                             month == 1 | month == 2 ~ mdy(paste0("0228",year)))) %>%
+  filter(ae_related != "Not Related") %>% 
+  mutate(updates = case_when(ae_date > today() - months(6) ~ as.character(today()),
+                            ae_date > today() - months(12) ~ as.character(today() - months(6)),
+                            ae_date > today() - months(18) ~ as.character(today() - months(12)),
+                            ae_date < today() - months(18) ~ paste0("Before ",today() - months(18)))) %>%
   select(ctcae_term, updates) %>%
   rename("Preferred Term" = ctcae_term)
 
@@ -1399,7 +1153,7 @@ add_table(table_7b_2)
 
 
 adverse_event_6_listing <- ae_master %>%
-  filter(ae_related != 0) %>% 
+  filter(ae_related != "Not Relatted") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
   filter(ae_date >= date_of_last_report) %>%
@@ -1431,21 +1185,16 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 ```{r table_7c_cond, echo=FALSE, warning=FALSE, message=FALSE}
 
 
-adverse_events_6 <- ae_master %>%
-  filter(ae_related == 0 &
-           ae_was_ae_serious == 1) %>% 
+adverse_events_7c <- ae_master %>%
+  filter(ae_related == "Not Related" &
+           ae_was_ae_serious == "Yes") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
-                             T ~ "Since Last Report")) %>%
-  select(ctcae_term, updates) %>%
-  rename("Preferred Term" = ctcae_term)
+                             T ~ "Since Last Report")) 
 
-crit <- nrow(adverse_events_6) > 0
+crit <- nrow(adverse_events_7c) > 0
 
 
 
@@ -1461,9 +1210,7 @@ print("There have been no non-related serious adverse events")
 ```{r table_7c, echo=FALSE, warning=FALSE, message=FALSE, eval=crit}
 
 
-adverse_events_6 <- ae_master %>%
-  filter(ae_related == 0 &
-           ae_was_ae_serious == 1) %>% 
+adverse_events_6 <- adverse_events_7c %>%
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
   select(ctcae_term, updates) %>%
@@ -1495,14 +1242,11 @@ adverse_events_6 <- ae_master %>%
 #' 20230822: Adding in response to DSMC notes. JC
 
 
-adverse_events_6 <- ae_master %>%
-  filter(ae_related == 0 &
-           ae_was_ae_serious == 1) %>% 
-  mutate(month = month(ae_date),
-         year = year(ae_date)) %>%
-  mutate(updates = case_when(month %in% semester_2 ~ mdy(paste0("0831",year)),
-                             month %in% semester_1 ~ mdy(paste0("0228",year+1)),
-                             month == 1 | month == 2 ~ mdy(paste0("0228",year)))) %>%
+adverse_events_6 <- adverse_events_7c %>%
+  mutate(updates = case_when(ae_date > today() - months(6) ~ as.character(today()),
+                            ae_date > today() - months(12) ~ as.character(today() - months(6)),
+                            ae_date > today() - months(18) ~ as.character(today() - months(12)),
+                            ae_date < today() - months(18) ~ paste0("Before ",today() - months(18)))) %>%
   select(ctcae_term, updates) %>%
   rename("Preferred Term" = ctcae_term)
 
@@ -1530,11 +1274,7 @@ adverse_events_6 <- ae_master %>%
 ```{r table_7c_listing, echo=FALSE, warning=FALSE, message=FALSE, include = TRUE, eval=crit}
 
 
-adverse_event_6_listing <- ae_master %>%
-  filter(ae_related == 0 &
-           ae_was_ae_serious == 1) %>%  
-  mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
-                             T ~ "Since Last Report")) %>%
+adverse_event_6_listing <- adverse_events_7c %>%
   filter(ae_date >= date_of_last_report) %>%
   #For investigators
   #select(record_id, redcap_repeat_instance, ae_date_of_onset, Outcome, ctcae_term, ae_dsmc_summary) %>%
@@ -1562,21 +1302,16 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_7d_cond, echo=FALSE, warning=FALSE, message=FALSE}
 
 
-adverse_events_6 <- ae_master %>%
-  filter(ae_related > 0 & ae_was_ae_serious == 1) %>% 
+adverse_events_7d <- ae_master %>%
+  filter(ae_related != "Not Related" & ae_was_ae_serious == "Yes") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
-                             T ~ "Since Last Report")) %>%
-  select(ctcae_term, updates) %>%
-  rename("Preferred Term" = ctcae_term)
+                             T ~ "Since Last Report")) 
 
-crit <- nrow(adverse_events_6) > 0
+crit <- nrow(adverse_events_7d) > 0
 
 
 ```
@@ -1591,10 +1326,7 @@ print("There have been no related serious adverse events.")
 ```{r table_7d, echo=FALSE, warning=FALSE, message=FALSE, eval=crit}
 
 
-adverse_events_6 <- ae_master %>%
-  filter(ae_related > 0 & ae_was_ae_serious == 1) %>% 
-  mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
-                             T ~ "Since Last Report")) %>%
+adverse_events_6 <- adverse_events_7d %>%
   select(ctcae_term, updates) %>%
   rename("Preferred Term" = ctcae_term)
 
@@ -1621,14 +1353,11 @@ add_table(table_7d)
 ```{r table_7d_events_6mo, echo=FALSE, warning=FALSE, message=FALSE, fig.width=8, eval=crit}
 #' 20230822: Adding in response to DSMC notes. JC
 
-adverse_events_6 <- ae_master %>%
-  filter(ae_related > 0 &
-           ae_was_ae_serious == 1) %>% 
-  mutate(month = month(ae_date),
-         year = year(ae_date)) %>%
-  mutate(updates = case_when(month %in% semester_2 ~ mdy(paste0("0831",year)),
-                             month %in% semester_1 ~ mdy(paste0("0228",year+1)),
-                             month == 1 | month == 2 ~ mdy(paste0("0228",year)))) %>%
+adverse_events_6 <- adverse_events_7d %>%
+  mutate(updates = case_when(ae_date > today() - months(6) ~ as.character(today()),
+                            ae_date > today() - months(12) ~ as.character(today() - months(6)),
+                            ae_date > today() - months(18) ~ as.character(today() - months(12)),
+                            ae_date < today() - months(18) ~ paste0("Before ",today() - months(18)))) %>%
   select(ctcae_term, updates) %>%
   rename("Preferred Term" = ctcae_term)
 
@@ -1655,11 +1384,7 @@ adverse_events_6 <- ae_master %>%
 ```{r table_7d_listing, echo=FALSE, warning=FALSE, message=FALSE, include = TRUE, eval=crit}
 
 
-adverse_event_6_listing <- ae_master %>%
-  filter(ae_related > 0 &
-           ae_was_ae_serious == 1) %>%  
-  mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
-                             T ~ "Since Last Report")) %>%
+adverse_event_6_listing <- adverse_events_7d %>%
   filter(ae_date >= date_of_last_report) %>%
   #For investigators
   #select(record_id, redcap_repeat_instance, ae_date_of_onset, Outcome, ctcae_term, ae_dsmc_summary) %>%
@@ -1689,16 +1414,12 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
-
 ```{r listing_1a, echo=FALSE, warning=FALSE, message=FALSE}
 
 # To do: need to update names and add in outcome column
 
 listing_1 <- ae_master %>%
-  filter(ae_was_ae_serious == 1) %>%
+  filter(ae_was_ae_serious == "Yes") %>%
   select(ae_date_of_onset, ae_date_ceased, Related, Outcome, `SOC and Preferred Term`, ae_dsmc_summary) %>%
   rename("Summary" = ae_dsmc_summary, "Date of Onset" = ae_date_of_onset, "Date Ceased" = ae_date_ceased)
 
@@ -1724,9 +1445,6 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r listing_2, echo=FALSE, warning=FALSE, message=FALSE}
 
@@ -1758,16 +1476,13 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r listing_3a, echo=FALSE, warning=FALSE, message=FALSE}
 ####This is actually listing_4a. A protocol deviation listing was added above, and all code below was kept consistent to save time.
 
 listing_3a <- ae_master %>%
   filter(ae_date >= date_of_last_report) %>%
-  filter(ae_related != 0) %>%
+  filter(ae_related != "Not Related") %>%
   arrange(desc(.$ae_related), ae_date) %>%
   select(ae_date, Related, Outcome, Severity, `SOC and Preferred Term`, ae_dsmc_summary) %>%
   rename("Date" = ae_date, "Summary" = ae_dsmc_summary) 
@@ -1792,7 +1507,7 @@ listing_3a %>%
 
 listing_3a <- ae_master %>%
   filter(ae_date >= date_of_last_report) %>%
-  filter(ae_related != 0) %>%
+  filter(ae_related != "Not Related") %>%
   arrange(desc(.$ae_related), ae_date) %>%
   select(ae_date, Related, Outcome, Severity, ctcae_term) %>%
   rename("Date" = ae_date, "Event" = ctcae_term) 
@@ -1817,15 +1532,12 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r listing_3b, echo=FALSE, warning=FALSE, message=FALSE}
 
 listing_3b <- ae_master %>%
   filter(ae_date >= date_of_last_report) %>%
-  filter(ae_related == 0) %>%
+  filter(ae_related == "Not Related") %>%
   arrange(ae_date) %>%
   select(ae_date, Related, Outcome, Severity, `SOC and Preferred Term`, ae_dsmc_summary) %>%
   rename("Date" = ae_date, "Summary" = ae_dsmc_summary) 
@@ -1850,9 +1562,6 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r listing_4a, echo=FALSE, warning=FALSE, message=FALSE}
 

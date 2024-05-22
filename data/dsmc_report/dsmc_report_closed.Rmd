@@ -10,141 +10,85 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-##### Declare Libraries #####
-library(rio)
-library(tidyverse)
-library(flextable)
-library(gtsummary)
-library(officedown)
-library(officer)
 
 
 #### Directories ####
-if(Sys.info()['user']=="vidon"){ #Eric's computer
-  root <- file.path('Z:')
-  user <- 'Eric'
-} else if(Sys.info()['sysname']=="Windows"){ #Jon's computer
-  root <- file.path('P:')
-  user <- 'Jon'
-} else {
-  error("This drive has not been set up yet.")
-}
+load(file = 'drives.Rdata')
+load(file = 'packages.Rdata')
+load(file = 'api_info.Rdata')
 
-drive_dir <- file.path(root,'IRB_STUDY0011132_Cohort','RIS_code')
-
-project_dir <- file.path(drive_dir,'DSMC')
-  script_dir <- file.path(project_dir,'R')
-  data_dir <- file.path(project_dir,'data')
-    raw_data_dir <- file.path(data_dir,'raw')
-    output_data_dir <- file.path(data_dir,'output')
-    dsmc_dir <- file.path(data_dir,'dsmc_report')
-      ppt_destination <- file.path(dsmc_dir,'tables_as_ppt')
-
- ###.Rdata Info####
-data_date <- file.info(file.path(output_data_dir,'clean_data.Rdata')) %>%
-  select(mtime) %>%
-  mutate(mtime = format(mtime - days(1), '%b. %d, %Y')) %>%
-  pull()  
       
+##### Load Libraries ####
+lapply(packages, require, character.only = TRUE)
+
+
+      
+###.Rdata Info####
+data_date <- today()
+
+#### Source Support Scripts ####
+data_dictionary <- rio::import(file.path(codebook_dir,'data_dictionary.csv')) %>%
+  janitor::clean_names()
+source(file.path(script_dir,'support_functions.R'))
+
+##### REDCap database ######
+redcap_list <- get_data(token = token, redcap_uri = redcap_uri, unique_identifier = unique_identifier)
+
+redcap <- redcap_list$df_return
+meta_data <- redcap_list$meta_data
+consort_data <- prep_consort(redcap, meta_data)
+screening_plot <- screening_consort(consort_data = consort_data, filepath = dsmc_dir)
+closed_consort_plot <- closed_consort(consort_data = consort_data, meta_data = meta_data, filepath = dsmc_dir)
+
 ##### Randomize Groups #####
-random_groups <- data.frame(random_group_letter = c('A','B')) %>%
-        mutate(random_group_number = sample(nrow(.), size = nrow(.), replace = F)) 
-      
-###### Load Data #####
-load(file.path(output_data_dir,'clean_data.Rdata'))
+random_groups <- REDCapR::checkbox_choices(meta_data$select_choices_or_calculations[which(meta_data$field_name == "group")]) %>%
+  mutate(names = paste0("group_",id)) %>%
+   mutate(random_group_number = sample(1:26, size = nrow(.), replace = F)) %>%
+   mutate(random_group_letter = LETTERS[random_group_number])
 
-##### COMET database (test entry removed) ######
-status_to_join <- look_up_table %>%
-      filter(field == "intervention_status") %>%
-      rename(Status = id_name) %>%
-      select(-field)
-      
-group_to_join <- look_up_table %>%
-  filter(field == "group") %>%
-  select(-field) %>%
-  rename(Group = id_name)
-    
-bold <- bold %>%
-  left_join(., status_to_join, by = c('intervention_status'='id_num')) %>%
-  left_join(., random_groups, by = c("group" = "random_group_number")) %>%
-  mutate(Group = random_group_letter)
+# ###### import ctcae categories and terms #######
+# ctcae_categories <- import(file.path(data_dir,'dsmc_report','CTCAE_v5.0_categories.xlsx'))
+# ctcae_terms <- import(file.path(data_dir,'dsmc_report','CTCAE_v5.0_terms.xlsx'))
+# 
+# #### Adverse Event and EOI Databases ######
+# #'20230822: Changed ctcae_term to be ae_event (the short description) if it's an "other" ctcae term. Check with team if they like that. JC
+# #'
+groups_to_join_ae <- redcap %>%
+  filter(!is.na(group)) %>%
+  left_join(., random_groups, by = c("group" = "label")) %>% 
+  select(record_id, intervention_status, group, random_group_letter)
+# 
+# ae_outcome_to_join <- look_up_table %>%
+#   filter(field == "ae_outcome_2") %>%
+#   select(-field)
 
-
-###### import ctcae categories and terms #######
-ctcae_categories <- import(file.path(data_dir,'dsmc_report','CTCAE_v5.0_categories.xlsx'))
-ctcae_terms <- import(file.path(data_dir,'dsmc_report','CTCAE_v5.0_terms.xlsx'))
-
-#### Adverse Event and EOI Databases ######
-#'20230822: Changed ctcae_term to be ae_event (the short description) if it's an "other" ctcae term. Check with team if they like that. JC
-#'
-groups_to_join_ae <- bold %>%
-    select(record_id, Status, Group, random_group_letter) 
-
-ae_outcome_to_join <- look_up_table %>%
-  filter(field == "ae_outcome_2") %>%
-  select(-field)
 
 ae_master <- redcap %>%
+  select(-group, -intervention_status) %>%
   filter(!is.na(ae_date)) %>%
-  mutate(Related = case_when(ae_related == 0 ~ "Not Related",
-                             ae_related == 2 ~ "Possibly Related",
-                             ae_related == 1 ~ "Definitely Related")) %>%
-  left_join(., ctcae_categories, by = c("ae_ctcae_category" = "ctcae_identifier")) %>%
-  left_join(., ctcae_terms, by = c("ae_ctcae_term" = "ctcae_term_identifier")) %>%
-  mutate(ctcae_term = case_when(grepl("Other",ctcae_term,ignore.case=T) & str_length(ae_ctcase_term_oth) <= 50 ~ ae_ctcase_term_oth,
-                                T ~ ctcae_term)) %>%
-  mutate("SOC and Preferred Term" = case_when(!grepl("Other", ctcae_term) ~ paste(ctcae_category,"-",ctcae_term),
-                                              TRUE ~ ctcae_term)) %>%
-  left_join(., ae_outcome_to_join, by = c('ae_outcome_2'='id_num')) %>%
-  rename("Outcome" = "id_name") %>%
-  mutate(Serious = case_when(ae_was_ae_serious == 0 ~ "No",
-                             ae_was_ae_serious == 1 ~ "Yes")) %>%
-  mutate(Severity = case_when(ae_severity == 1 ~ "Grade 1; Mild",
-                              ae_severity == 2 ~ "Grade 2; Moderate",
-                              ae_severity == 3 ~ "Grade 3; Severe",
-                              ae_severity == 4 ~ "Grade 4; Life Threatening",
-                              ae_severity == 5 ~ "Grade 5; Death related to AE")) %>%
+  mutate(Related = ae_related,
+         ctcae_term = case_when(grepl("Other",ae_ctcae_term,ignore.case=T) & str_length(ae_ctcase_term_oth) <= 50 ~ ae_ctcase_term_oth,
+                                T ~ ae_ctcae_term)) %>%
+  mutate("SOC and Preferred Term" = case_when(!grepl("Other", ae_ctcae_term) ~ paste(ae_ctcae_category,"-",ae_ctcae_term),
+                                              TRUE ~ ae_ctcae_term)) %>%
+  rename("Outcome" = ae_outcome) %>%
+  mutate(Serious = ae_was_ae_serious) %>%
+  mutate(Severity = ae_severity) %>%
   mutate(ctcae_term = case_when(grepl("covid",ctcae_term,ignore.case=T) ~ "COVID-19",
                                 T ~ ctcae_term)) %>%
-  left_join(., groups_to_join_ae, by = "record_id") 
-
-
-
-
+  left_join(., groups_to_join_ae, by = c("record_id")) 
 
 
 ##### import recruitment projections ####
-recruitment_projection <- import(file.path(data_dir,'codebooks','recruitment_projection.xlsx')) %>%
+recruitment_projection <- import(file.path(codebook_dir,'recruitment_projection.xlsx')) %>%
   mutate(week = week(ymd(Date)), year = year(ymd(Date)))
 
-##### Source consort diagram to use throughout document ####
-source(file.path(data_dir,'dsmc_report','dsmc_consort_generator_closed.R'))
-
 ###### Date as of Report ####
-date_as_of <- data_date
-
-###### Last Report ######
-date_of_last_report <- ymd('2023-02-08')
+date_as_of <- format(Sys.time(), '%b %d, %Y')
 
 #### date of first screen ####
-first_screen <- min(ymd(bold$scrn_date), na.rm = T)-1
+first_screen <- min(ymd(redcap$scrn_date), na.rm = T)-1
 
-#### Set Semester months ####
-semester_1 <- semesters$semester_1
-semester_2 <- semesters$semester_2
-year(today())
-
-last_semester_2_date <- ymd(paste0(year(today()),
-                              str_pad(as.character(first(semester_1)), side = "left", pad = "0", width = 2),
-                              "01")) - 1
-semester_2_string <- paste0(str_pad(as.character(month(last_semester_2_date)), side = "left", pad = "0", width = 2),
-                            day(last_semester_2_date))
-
-last_semester_1_date <- ymd(paste0(year(today()),
-                              str_pad(as.character(first(semester_2)), side = "left", pad = "0", width = 2),
-                              "01")) - 1
-semester_1_string <- paste0(str_pad(as.character(month(last_semester_1_date)), side = "left", pad = "0", width = 2),
-                                                 day(last_semester_1_date))
 
 #### Testing PPTX Export ####
 #' adding on 20230921
@@ -184,6 +128,7 @@ add_table <- function(table){
 
 
 
+
 ```
 
 \newpage
@@ -204,19 +149,13 @@ Please write a closed report summary
 
 Date as of: `r date_as_of` 
 
-\newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
-
-Recruitment start date: Sept 09, 2021
-
-```{r consorta, echo=FALSE, warning=FALSE, message=FALSE}
+```{r consorta, echo=FALSE, warning=FALSE, message=FALSE, out.width='700px'}
 
 
 
-knitr::include_graphics(file.path(data_dir,'dsmc_report','closed_consort_screen.png'), dpi = 6.92) 
+knitr::include_graphics(file.path(data_dir,'dsmc_report','screening_consort.jpg')) 
+
 
 ```
 
@@ -226,19 +165,11 @@ knitr::include_graphics(file.path(data_dir,'dsmc_report','closed_consort_screen.
 
 Date as of: `r date_as_of` 
 
-\newline
-
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
-
-Recruitment start date: Sept 09, 2021
-
-```{r consortb, echo=FALSE, warning=FALSE, message=FALSE}
+```{r consortb, echo=FALSE, warning=FALSE, out.width='700px'}
 
 
 
-knitr::include_graphics(file.path(data_dir,'dsmc_report','closed_consort_enrolled.png'), dpi = 6.92) 
+knitr::include_graphics(file.path(data_dir,'dsmc_report','enrollment_consort_closed.jpg')) 
 
 ```
 
@@ -252,27 +183,27 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_4, echo=FALSE, warning=FALSE, message=FALSE}
 
+
 #Source  https://www.ers.usda.gov/data-products/rural-urban-commuting-area-codes/
-#Updated on 8/18/22 with a list from EDV
+#Updated on 8/18/22 with list from EDV
 rural_zips <- import(file.path(data_dir,'dsmc_report','forhp-eligible-zips.xlsx')) %>%
   pull(ZIP_CODE)
 
-enrolled_df <- randomized 
-
-test <- enrolled_df  %>%
+#### Since Last Report ####
+dems_since_last_report <- consort_data$randomized %>%
   mutate(Rural = case_when(scrn_address_zip %in% rural_zips ~ "Rural",
                            T ~ "Not Rural")) %>%
-  select(race, ethnicity, sex, Rural, age, Group) %>%
-  rename(Race = race, Ethnicity = ethnicity, sex = sex, Age = age)
+  mutate(Updates = case_when(rand_date < date_of_last_report ~ "Cumulative at Last Report",
+                             T ~ "Since Last Report")) %>%
+  select(race, ethnicity, sex, Rural, age, Updates, group) %>%
+  rename(Race = race, Ethnicity = ethnicity, Sex = sex, Age = age)
 
-gtsummary::tbl_summary(test,
-                       by = Group,
+
+gtsummary::tbl_summary(dems_since_last_report,
+                       by = group,
                        statistic = all_continuous() ~ "{mean}, ({sd})",
                        type = list(Age ~ "continuous")) %>%
   add_p(list(all_continuous() ~ "aov",
@@ -342,24 +273,21 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_6_events_summary, echo=FALSE, warning=FALSE, message=FALSE, fig.width=8}
 
 
 adverse_events_6 <- ae_master %>%
-  filter(ae_related == 0) %>% 
+  filter(ae_related == "Not Related") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
-  select(ctcae_term, Group, updates) %>%
+  select(ctcae_term, group, updates) %>%
   rename("Preferred Term" = ctcae_term,
          "Updates" = updates) 
 
 if(nrow(adverse_events_6)>0){
   gtsummary::tbl_summary(adverse_events_6,
-                       by = Group,
+                       by = group,
                        sort = everything() ~ "frequency") %>%
   modify_header(label ~ "Adverse Events") %>%
   as_flex_table() %>%
@@ -383,26 +311,23 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_6b_events_summary, echo=FALSE, warning=FALSE, message=FALSE}
 
 
 adverse_events_6 <- ae_master %>%
-  filter(ae_related != 0) %>% 
+  filter(ae_related != "Not Related") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
-  select(ctcae_term, updates, Group) %>%
+  select(ctcae_term, updates, group) %>%
   rename("Preferred Term" = ctcae_term,
          "Updates" = updates) 
 
 if(nrow(adverse_events_6)>0){
   gtsummary::tbl_summary(adverse_events_6,
-                       by = Group,
+                       by = group,
                        sort = everything() ~ "frequency") %>%
-  #add_overall() %>%
+  add_overall() %>%
   modify_header(label ~ "Adverse Events") %>%
   as_flex_table() %>%
   align(align = "center", part = "header") %>%
@@ -429,27 +354,24 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_7c, echo=FALSE, warning=FALSE, message=FALSE}
 
 
 adverse_events_6 <- ae_master %>%
-  filter(ae_related == 0 &
-           ae_was_ae_serious == 1) %>% 
+  filter(ae_related == "Not Related" &
+           ae_was_ae_serious == "Yes") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
-  select(ctcae_term, updates, Group) %>%
+  select(ctcae_term, updates, group) %>%
   rename("Preferred Term" = ctcae_term,
          "Updates" = updates) 
 
 if(nrow(adverse_events_6)>0){
   gtsummary::tbl_summary(adverse_events_6,
-                       by = Group,
+                       by = group,
                        sort = everything() ~ "frequency") %>%
-  #add_overall() %>%
+  add_overall() %>%
   modify_header(label ~ "Adverse Events") %>%
   as_flex_table() %>%
   align(align = "center", part = "header") %>%
@@ -475,24 +397,21 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_7d, echo=FALSE, warning=FALSE, message=FALSE}
 
 
 adverse_events_6 <- ae_master %>%
-  filter(ae_related > 0 & ae_was_ae_serious == 1) %>% 
+  filter(ae_related != "Not Related" & ae_was_ae_serious == "Yes") %>% 
   mutate(updates = case_when(ae_date < date_of_last_report ~ "Cumulative at Last Report",
                              T ~ "Since Last Report")) %>%
-  select(ctcae_term, updates, Group) %>%
+  select(ctcae_term, updates, group) %>%
   rename("Preferred Term" = ctcae_term,
          "Updates" = updates)
 
 if(nrow(adverse_events_6)>0){
   gtsummary::tbl_summary(adverse_events_6,
-                         by = Group,
+                         by = group,
                          sort = everything() ~ "frequency") %>%
     add_overall() %>%
     modify_header(label ~ "Adverse Events") %>%
@@ -521,18 +440,16 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_7a, echo=FALSE, warning=FALSE, message=FALSE}
 
 
 adverse_events_7 <- ae_master %>%
-  filter(!is.na(Group)) %>%
+  filter(!is.na(group)) %>%
   rename("Preferred Term" = ctcae_term) %>% 
-  select(Group, Severity) %>%
-  arrange(Group)
+  select(group, Severity) %>%
+  arrange(group) %>%
+  rename(Group = group)
 
 if(nrow(adverse_events_7)>0){
 gtsummary::tbl_summary(adverse_events_7,
@@ -560,17 +477,15 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r table_7b, echo=FALSE, warning=FALSE, message=FALSE}
 
 
 adverse_events_7 <- ae_master %>%
-  filter(!is.na(Group)) %>%
+  filter(!is.na(group)) %>%
   rename("Preferred Term" = ctcae_term) %>%
-  select(Group, Related)
+  select(group, Related) %>%
+  rename("Group" = group)
 
 if(nrow(adverse_events_7)>0){
 gtsummary::tbl_summary(adverse_events_7,
@@ -600,17 +515,14 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r listing_1a, echo=FALSE, warning=FALSE, message=FALSE}
 
 # To do: need to update names and add in outcome column
 
 listing_1 <- ae_master %>%
-  filter(ae_was_ae_serious == 1) %>%
-  select(Group, ae_date_of_onset, ae_date_ceased, Related, `SOC and Preferred Term`, ae_dsmc_summary) %>%
+  filter(ae_was_ae_serious == "Yes") %>%
+  select(group, ae_date_of_onset, ae_date_ceased, Related, `SOC and Preferred Term`, ae_dsmc_summary) %>%
   rename("Summary" = ae_dsmc_summary, "Date of Onset" = ae_date_of_onset, "Date Ceased" = ae_date_ceased)
 
 if(nrow(listing_1) > 0) {
@@ -636,9 +548,6 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r listing_2, echo=FALSE, warning=FALSE, message=FALSE}
 
@@ -647,7 +556,8 @@ Date of report: `r format(Sys.time(), '%b %d, %Y')`
 listing_2 <- ae_master %>%
   filter(!is.na(ae_death_date)) %>% 
   rename("Date of Death" = ae_death_date, "Cause of Death" = ae_death_cause) %>%
-  select(Group, "Date of Death", "Cause of Death", Related) 
+  select(group, "Date of Death", "Cause of Death", Related) %>%
+  rename(Group = group)
   
 
 if(nrow(listing_2) > 0) {
@@ -671,19 +581,17 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
 
-\newline
 
 ```{r listing_3a, echo=FALSE, warning=FALSE, message=FALSE}
 ####This is actually listing_4a. A protocol deviation listing was added above, and all code below was kept consistent to save time.
 
 listing_3a <- ae_master %>%
   filter(ae_date >= date_of_last_report) %>%
-  filter(ae_related != 0) %>%
-  arrange(desc(.$ae_related), ae_date) %>%
-  select(Group, ae_date, Related, Severity, `SOC and Preferred Term`, ae_dsmc_summary) %>%
-  rename("Date" = ae_date, "Summary" = ae_dsmc_summary) 
+  filter(ae_related != "Not Related") %>%
+  arrange(ae_date) %>%
+  select(group, ae_date, Related, Severity, `SOC and Preferred Term`, ae_dsmc_summary) %>%
+  rename("Date" = ae_date, "Summary" = ae_dsmc_summary, "Group" = group) 
 
 
 listing_3a %>% 
@@ -696,16 +604,15 @@ listing_3a %>%
 
 ```
 
-\newpage
 ```{r listing_3a_powerpoint, echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, include = F}
 #' 20230802 This was added to for the presentation of AEs only. It's not included in the report, but is used to generate a table of AEs that are 
 #' easy to show during the powerpoint
 
 listing_3a <- ae_master %>%
   filter(ae_date >= date_of_last_report) %>%
-  filter(ae_related != 0) %>%
-  arrange(Group, ae_date) %>%
-  select(Group, ae_date, Related, Outcome, Severity, ctcae_term) %>%
+  filter(ae_related != "Not Related") %>%
+  arrange(group, ae_date) %>%
+  select(group, ae_date, Related, Outcome, Severity, ctcae_term) %>%
   rename("Date" = ae_date, "Event" = ctcae_term) 
 
 
@@ -732,18 +639,15 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r listing_3b, echo=FALSE, warning=FALSE, message=FALSE}
 
 listing_3b <- ae_master %>%
   filter(ae_date >= date_of_last_report) %>%
-  filter(ae_related == 0) %>%
+  filter(ae_related == "Not Related") %>%
   arrange(ae_date) %>%
-  select(Group, ae_date, Related, Severity, `SOC and Preferred Term`, ae_dsmc_summary) %>%
-  rename("Date" = ae_date, "Summary" = ae_dsmc_summary) 
+  select(group, ae_date, Related, Severity, `SOC and Preferred Term`, ae_dsmc_summary) %>%
+  rename("Date" = ae_date, "Summary" = ae_dsmc_summary, "Group" = group) 
 
 
 
@@ -766,16 +670,14 @@ Date as of: `r date_as_of`
 
 \newline
 
-Date of report: `r format(Sys.time(), '%b %d, %Y')`
-
-\newline
 
 ```{r listing_4a, echo=FALSE, warning=FALSE, message=FALSE}
 
 listing_4a <- ae_master %>%
   rename("Date" = ae_date) %>%
-  select(Group, Date, "SOC and Preferred Term", Related, Severity, Serious, Outcome)  %>%
-  arrange(Group, "SOC and Preferred Term")
+  select(group, Date, "SOC and Preferred Term", Related, Severity, Serious, Outcome)  %>%
+  arrange(group, "SOC and Preferred Term") %>%
+  rename(Group = group)
 
 
 listing_4a %>% 
